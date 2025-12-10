@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Loader2, Wallet, TrendingUp, Users, Clock, CheckCircle2, XCircle, LogOut, ChevronDown } from 'lucide-react';
 import TokenSaleABI from '../abi/TokenSaleContract.json';
@@ -41,6 +42,7 @@ export default function TokenSale() {
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [liveBnbPrice, setLiveBnbPrice] = useState<number>(0);
+  const [showWalletModal, setShowWalletModal] = useState(false);
 
   // Fetch BNB price from CoinGecko
   const fetchBnbPrice = async () => {
@@ -64,10 +66,17 @@ export default function TokenSale() {
     return () => clearInterval(interval);
   }, []);
 
-  // Connect wallet
-  const connectWallet = async () => {
+  // Show wallet selection modal
+  const showWalletSelection = () => {
+    setShowWalletModal(true);
+  };
+
+  // Connect wallet with specific provider
+  const connectWallet = async (walletType: 'metamask' | 'trustwallet' | 'walletconnect' | 'injected' = 'injected') => {
+    setShowWalletModal(false);
+    
     if (!window.ethereum) {
-      toast.error('Please install MetaMask!');
+      toast.error('Please install a Web3 wallet!');
       return;
     }
 
@@ -75,7 +84,7 @@ export default function TokenSale() {
       setIsConnecting(true);
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // Request accounts - this will open MetaMask popup to select account
+      // Request accounts - this will open wallet popup to select account
       const accounts = await window.ethereum.request({
         method: 'eth_requestAccounts',
       });
@@ -235,7 +244,8 @@ export default function TokenSale() {
       if (paymentMethod === 'BNB') {
         const costInBnb = calculateCost();
         const valueWei = ethers.parseEther(costInBnb);
-        tx = await contract.buyWithBNB(tokenAmountWei, { value: valueWei });
+        // buyWithBNB() doesn't take parameters - it calculates tokens from BNB sent
+        tx = await contract.buyWithBNB({ value: valueWei });
       } else {
         // USDT purchase
         const usdtContract = new ethers.Contract(
@@ -252,7 +262,8 @@ export default function TokenSale() {
         await approveTx.wait();
         
         toast.info('Purchasing tokens...');
-        tx = await contract.buyWithUSDT(tokenAmountWei);
+        // buyWithUSDC takes USDT amount, not token amount
+        tx = await contract.buyWithUSDC(usdtAmountWei);
       }
 
       // Add to transactions
@@ -416,7 +427,7 @@ export default function TokenSale() {
             </div>
           ) : (
             <Button 
-              onClick={connectWallet} 
+              onClick={showWalletSelection} 
               disabled={isConnecting} 
               size="lg"
               className="rounded-full text-white font-semibold px-8"
@@ -706,6 +717,87 @@ export default function TokenSale() {
           </p>
         </footer>
       </main>
+
+      {/* Wallet Selection Modal */}
+      <Dialog open={showWalletModal} onOpenChange={setShowWalletModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold">Connect Wallet</DialogTitle>
+            <DialogDescription>
+              Choose your preferred wallet to connect
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-4">
+            {/* MetaMask */}
+            <Button
+              onClick={() => connectWallet('metamask')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-orange-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">MetaMask</div>
+                  <div className="text-sm text-gray-500">Connect with MetaMask</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* Trust Wallet */}
+            <Button
+              onClick={() => connectWallet('trustwallet')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">Trust Wallet</div>
+                  <div className="text-sm text-gray-500">Connect with Trust Wallet</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* WalletConnect */}
+            <Button
+              onClick={() => connectWallet('walletconnect')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-purple-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">WalletConnect</div>
+                  <div className="text-sm text-gray-500">Scan with WalletConnect</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* Other Wallets */}
+            <Button
+              onClick={() => connectWallet('injected')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-gray-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">Other Wallets</div>
+                  <div className="text-sm text-gray-500">Connect with browser wallet</div>
+                </div>
+              </div>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
