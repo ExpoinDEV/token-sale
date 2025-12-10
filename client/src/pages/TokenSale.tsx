@@ -10,7 +10,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { toast } from 'sonner';
 import { Loader2, Wallet, TrendingUp, Users, Clock, CheckCircle2, XCircle, LogOut, ChevronDown } from 'lucide-react';
 import TokenSaleABI from '../abi/TokenSaleContract.json';
-import { TOKEN_SALE_CONTRACT_ADDRESS, USDT_ADDRESS } from '../web-utils/constants';
+import { TOKEN_SALE_CONTRACT_ADDRESS, USDT_ADDRESS, TOKEN_PRICE_USD } from '../web-utils/constants';
 
 interface SaleInfo {
   totalSold: string;
@@ -53,7 +53,7 @@ export default function TokenSale() {
     } catch (error) {
       console.error('Error fetching BNB price:', error);
       // Fallback to a default price if API fails
-      setLiveBnbPrice(890);
+      setLiveBnbPrice(850);
     }
   };
 
@@ -180,15 +180,18 @@ export default function TokenSale() {
 
   // Calculate cost based on token amount
   const calculateCost = () => {
-    if (!tokenAmount || !saleInfo) return '0';
+    if (!tokenAmount) return '0';
     
     const tokens = parseFloat(tokenAmount);
-    const price = parseFloat(saleInfo.tokenPrice);
+    if (isNaN(tokens) || tokens <= 0) return '0';
+    
+    // Use token price from constants or contract
+    const price = saleInfo ? parseFloat(saleInfo.tokenPrice) : TOKEN_PRICE_USD;
     
     if (paymentMethod === 'BNB') {
-      // Use live BNB price from CoinGecko if available, otherwise fallback to contract price
-      const bnbPriceUsd = liveBnbPrice > 0 ? liveBnbPrice : parseFloat(saleInfo.bnbPrice);
-      const costInBnb = (tokens * price) / bnbPriceUsd;
+      // Use live BNB price from CoinGecko
+      if (liveBnbPrice <= 0) return '0';
+      const costInBnb = (tokens * price) / liveBnbPrice;
       return costInBnb.toFixed(6);
     } else {
       const costInUsdt = tokens * price;
