@@ -116,8 +116,14 @@ export default function TokenSale() {
   };
 
   // Connect wallet with specific provider
-  const connectWallet = async (walletType: 'metamask' | 'trustwallet' | 'walletconnect' | 'injected' = 'injected') => {
+  const connectWallet = async (walletType: 'metamask' | 'trustwallet' | 'rabby' | 'okx' | 'safepal' | 'binance' = 'metamask') => {
     setShowWalletModal(false);
+    
+    // Block Phantom wallet
+    if ((window as any).phantom?.ethereum) {
+      toast.error('Phantom wallet is not supported. Please use MetaMask, Rabby, OKX, SafePal, Binance Web3, or Trust Wallet.');
+      return;
+    }
     
     if (!window.ethereum) {
       toast.error('Please install a Web3 wallet!');
@@ -316,10 +322,13 @@ export default function TokenSale() {
       const tokenAmountWei = ethers.parseUnits(tokenAmount, 18);
 
       if (paymentMethod === 'BNB') {
-        const costInBnb = calculateCost();
-        const valueWei = ethers.parseEther(costInBnb);
+        // Get exact BNB amount needed from contract
+        const bnbNeeded = await contract.getBNBForTokens(tokenAmountWei);
+        
+        toast.info(`Purchasing ${tokenAmount} EXN for ${ethers.formatEther(bnbNeeded)} BNB...`);
+        
         // buyWithBNB() doesn't take parameters - it calculates tokens from BNB sent
-        tx = await contract.buyWithBNB({ value: valueWei });
+        tx = await contract.buyWithBNB({ value: bnbNeeded });
       } else {
         // USDT purchase
         const usdtContract = new ethers.Contract(
@@ -833,6 +842,74 @@ export default function TokenSale() {
               </div>
             </Button>
 
+            {/* Rabby */}
+            <Button
+              onClick={() => connectWallet('rabby')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">Rabby</div>
+                  <div className="text-sm text-gray-500">Connect with Rabby Wallet</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* OKX */}
+            <Button
+              onClick={() => connectWallet('okx')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-black flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <div className="font-semibold">OKX Wallet</div>
+                  <div className="text-sm text-gray-500">Connect with OKX Wallet</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* SafePal */}
+            <Button
+              onClick={() => connectWallet('safepal')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-purple-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">SafePal</div>
+                  <div className="text-sm text-gray-500">Connect with SafePal Wallet</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* Binance Web3 */}
+            <Button
+              onClick={() => connectWallet('binance')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-yellow-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-yellow-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">Binance Web3 Wallet</div>
+                  <div className="text-sm text-gray-500">Connect with Binance Web3</div>
+                </div>
+              </div>
+            </Button>
+
             {/* Trust Wallet */}
             <Button
               onClick={() => connectWallet('trustwallet')}
@@ -846,40 +923,6 @@ export default function TokenSale() {
                 <div>
                   <div className="font-semibold">Trust Wallet</div>
                   <div className="text-sm text-gray-500">Connect with Trust Wallet</div>
-                </div>
-              </div>
-            </Button>
-
-            {/* WalletConnect */}
-            <Button
-              onClick={() => connectWallet('walletconnect')}
-              variant="outline"
-              className="w-full h-16 justify-start text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
-                  <Wallet className="w-6 h-6 text-purple-600" />
-                </div>
-                <div>
-                  <div className="font-semibold">WalletConnect</div>
-                  <div className="text-sm text-gray-500">Scan with WalletConnect</div>
-                </div>
-              </div>
-            </Button>
-
-            {/* Other Wallets */}
-            <Button
-              onClick={() => connectWallet('injected')}
-              variant="outline"
-              className="w-full h-16 justify-start text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center">
-                  <Wallet className="w-6 h-6 text-gray-600" />
-                </div>
-                <div>
-                  <div className="font-semibold">Other Wallets</div>
-                  <div className="text-sm text-gray-500">Connect with browser wallet</div>
                 </div>
               </div>
             </Button>
