@@ -333,19 +333,26 @@ export default function TokenSale() {
         // USDT purchase
         const usdtContract = new ethers.Contract(
           USDT_ADDRESS,
-          ['function approve(address spender, uint256 amount) returns (bool)'],
+          ['function approve(address spender, uint256 amount) returns (bool)', 'function balanceOf(address) view returns (uint256)'],
           signer
         );
         
         const costInUsdt = calculateCost();
         const usdtAmountWei = ethers.parseUnits(costInUsdt, 18);
         
-        toast.info('Approving USDT...');
+        // Check USDT balance
+        const usdtBalance = await usdtContract.balanceOf(account);
+        if (usdtBalance < usdtAmountWei) {
+          toast.error(`Insufficient USDT balance. You need ${costInUsdt} USDT (Tether USD on BSC, not USDC).`);
+          return;
+        }
+        
+        toast.info('Approving USDT (Tether USD)...');
         const approveTx = await usdtContract.approve(TOKEN_SALE_CONTRACT_ADDRESS, usdtAmountWei);
         await approveTx.wait();
         
-        toast.info('Purchasing tokens...');
-        // buyWithUSDC takes USDT amount, not token amount
+        toast.info('Purchasing tokens with USDT...');
+        // buyWithUSDC takes USDT amount (contract method name is historical)
         tx = await contract.buyWithUSDC(usdtAmountWei);
       }
 
@@ -602,7 +609,7 @@ export default function TokenSale() {
                 <Tabs value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as 'BNB' | 'USDT')}>
                   <TabsList className="grid w-full grid-cols-2 rounded-2xl p-1 h-auto">
                     <TabsTrigger value="BNB" className="rounded-xl py-3 text-base font-medium">Pay with BNB</TabsTrigger>
-                    <TabsTrigger value="USDT" className="rounded-xl py-3 text-base font-medium">Pay with USDT</TabsTrigger>
+                    <TabsTrigger value="USDT" className="rounded-xl py-3 text-base font-medium">Pay with USDT (Tether)</TabsTrigger>
                   </TabsList>
                   
                   <TabsContent value="BNB" className="space-y-4 mt-6">
