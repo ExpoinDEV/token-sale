@@ -40,6 +40,29 @@ export default function TokenSale() {
   const [bnbBalance, setBnbBalance] = useState('0');
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+  const [liveBnbPrice, setLiveBnbPrice] = useState<number>(0);
+
+  // Fetch BNB price from CoinGecko
+  const fetchBnbPrice = async () => {
+    try {
+      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin&vs_currencies=usd');
+      const data = await response.json();
+      if (data.binancecoin && data.binancecoin.usd) {
+        setLiveBnbPrice(data.binancecoin.usd);
+      }
+    } catch (error) {
+      console.error('Error fetching BNB price:', error);
+      // Fallback to a default price if API fails
+      setLiveBnbPrice(890);
+    }
+  };
+
+  // Fetch BNB price on mount and every 30 seconds
+  useEffect(() => {
+    fetchBnbPrice();
+    const interval = setInterval(fetchBnbPrice, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Connect wallet
   const connectWallet = async () => {
@@ -163,7 +186,8 @@ export default function TokenSale() {
     const price = parseFloat(saleInfo.tokenPrice);
     
     if (paymentMethod === 'BNB') {
-      const bnbPriceUsd = parseFloat(saleInfo.bnbPrice);
+      // Use live BNB price from CoinGecko if available, otherwise fallback to contract price
+      const bnbPriceUsd = liveBnbPrice > 0 ? liveBnbPrice : parseFloat(saleInfo.bnbPrice);
       const costInBnb = (tokens * price) / bnbPriceUsd;
       return costInBnb.toFixed(6);
     } else {
