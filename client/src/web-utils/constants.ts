@@ -10,7 +10,8 @@ export const BSC_RPC_URL = "https://bsc-dataseed.binance.org/";
 
 // Token Sale Configuration
 export const TOKEN_PRICE_USD = 0.025; // $0.025 per token
-export const MIN_PURCHASE_TOKENS = 250; // Minimum 250 tokens
+export const MIN_PURCHASE_TOKENS = 40; // Minimum 40 tokens ($1)
+export const MAX_PURCHASE_TOKENS = 400000; // Maximum 400,000 tokens ($10,000)
 export const MAX_TOKENS_FOR_SALE = 600000000; // 600 million tokens
 
 // BSCScan Links
