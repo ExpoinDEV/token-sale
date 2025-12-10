@@ -53,7 +53,7 @@ export default function TokenSale() {
     } catch (error) {
       console.error('Error fetching BNB price:', error);
       // Fallback to a default price if API fails
-      setLiveBnbPrice(850);
+      setLiveBnbPrice(650);
     }
   };
 
@@ -201,10 +201,18 @@ export default function TokenSale() {
 
   // Handle purchase
   const handlePurchase = async () => {
-    if (!account || !tokenAmount || !saleInfo) return;
+    if (!account) {
+      toast.error('Please connect your wallet first');
+      return;
+    }
+    
+    if (!tokenAmount) {
+      toast.error('Please enter token amount');
+      return;
+    }
 
     const tokens = parseFloat(tokenAmount);
-    const minPurchase = parseFloat(saleInfo.minPurchase);
+    const minPurchase = saleInfo ? parseFloat(saleInfo.minPurchase) : 250;
 
     if (tokens < minPurchase) {
       toast.error(`Minimum purchase is ${minPurchase} tokens`);
