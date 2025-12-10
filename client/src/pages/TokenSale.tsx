@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,23 +9,9 @@ import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Loader2, Wallet, TrendingUp, Clock, CheckCircle2, XCircle, LogOut, ChevronDown } from 'lucide-react';
+import { Loader2, Wallet, TrendingUp, Users, Clock, CheckCircle2, XCircle, LogOut, ChevronDown } from 'lucide-react';
 import TokenSaleABI from '../abi/TokenSaleContract.json';
 import { TOKEN_SALE_CONTRACT_ADDRESS, USDT_ADDRESS, TOKEN_PRICE_USD } from '../web-utils/constants';
-
-// BSC Mainnet configuration
-const BSC_CHAIN_ID = '0x38';
-const BSC_CONFIG = {
-  chainId: '0x38',
-  chainName: 'Binance Smart Chain Mainnet',
-  nativeCurrency: {
-    name: 'BNB',
-    symbol: 'BNB',
-    decimals: 18,
-  },
-  rpcUrls: ['https://bsc-dataseed.binance.org/'],
-  blockExplorerUrls: ['https://bscscan.com/'],
-};
 
 interface SaleInfo {
   totalSold: string;
@@ -57,79 +43,28 @@ export default function TokenSale() {
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [liveBnbPrice, setLiveBnbPrice] = useState<number>(0);
   const [showWalletModal, setShowWalletModal] = useState(false);
-  const [isCorrectNetwork, setIsCorrectNetwork] = useState(true);
 
-  // Check if connected to BSC network
-  const checkNetwork = useCallback(async () => {
-    if (!window.ethereum) return false;
-    
-    try {
-      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-      const isBSC = chainId === BSC_CHAIN_ID;
-      setIsCorrectNetwork(isBSC);
-      return isBSC;
-    } catch (error) {
-      console.error('Error checking network:', error);
-      setIsCorrectNetwork(false);
-      return false;
-    }
-  }, []);
-
-  // Switch to BSC network
-  const switchToBSCNetwork = async () => {
-    try {
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BSC_CHAIN_ID }],
-      });
-      setIsCorrectNetwork(true);
-      toast.success('Switched to BSC Mainnet');
-    } catch (switchError: any) {
-      // If network not added, add it
-      if (switchError.code === 4902) {
-        try {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [BSC_CONFIG],
-          });
-          setIsCorrectNetwork(true);
-          toast.success('BSC network added and switched');
-        } catch (addError) {
-          console.error('Error adding BSC network:', addError);
-          toast.error('Failed to add BSC network');
-        }
-      } else {
-        console.error('Error switching network:', switchError);
-        toast.error('Failed to switch network');
-      }
-    }
-  };
-
-  // Fetch BNB price from CoinGecko with better error handling
+  // Fetch BNB price from CoinGecko
   const fetchBnbPrice = async () => {
     try {
-      const response = await fetch(
-        'https://api.coingecko.com/api/v3/simple/price?ids=binancecoin&vs_currencies=usd',
-        { timeout: 5000 }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
+      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin&vs_currencies=usd');
+      if (!response.ok) throw new Error('API error');
       
       const data = await response.json();
+      
+      // Validate price data
       if (data.binancecoin?.usd && data.binancecoin.usd > 0) {
         setLiveBnbPrice(data.binancecoin.usd);
       } else {
-        throw new Error('Invalid price data from API');
+        throw new Error('Invalid price data');
       }
     } catch (error) {
       console.error('Error fetching BNB price:', error);
-      // Fallback to contract price or default
+      // Use fallback from contract if available, otherwise use default
       if (saleInfo?.bnbPrice && parseFloat(saleInfo.bnbPrice) > 0) {
         setLiveBnbPrice(parseFloat(saleInfo.bnbPrice));
       } else {
-        setLiveBnbPrice(650); // Conservative default
+        setLiveBnbPrice(650);
       }
     }
   };
@@ -139,7 +74,41 @@ export default function TokenSale() {
     fetchBnbPrice();
     const interval = setInterval(fetchBnbPrice, 30000);
     return () => clearInterval(interval);
-  }, [saleInfo?.bnbPrice]);
+  }, []);
+
+  // Listen for account and network changes
+  useEffect(() => {
+    if (window.ethereum) {
+      // Account change listener
+      const handleAccountsChanged = async (accounts: string[]) => {
+        if (accounts.length > 0) {
+          setAccount(accounts[0]);
+          const provider = new ethers.BrowserProvider(window.ethereum!);
+          await fetchBalances(accounts[0], provider);
+          await fetchSaleInfo(provider);
+        } else {
+          // User disconnected wallet
+          setAccount('');
+          setBnbBalance('0');
+          setUsdtBalance('0');
+          setSaleInfo(null);
+        }
+      };
+      
+      // Network change listener
+      const handleChainChanged = () => {
+        window.location.reload();
+      };
+      
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+      window.ethereum.on('chainChanged', handleChainChanged);
+      
+      return () => {
+        window.ethereum?.removeListener('accountsChanged', handleAccountsChanged);
+        window.ethereum?.removeListener('chainChanged', handleChainChanged);
+      };
+    }
+  }, []);
 
   // Show wallet selection modal
   const showWalletSelection = () => {
@@ -151,41 +120,57 @@ export default function TokenSale() {
     setShowWalletModal(false);
     
     if (!window.ethereum) {
-      toast.error('Please install a Web3 wallet like MetaMask!');
+      toast.error('Please install a Web3 wallet!');
       return;
     }
 
     try {
       setIsConnecting(true);
       
-      // Check network before connecting
-      const isBSC = await checkNetwork();
-      if (!isBSC) {
-        toast.error('Please switch to Binance Smart Chain (BSC) Mainnet');
-        await switchToBSCNetwork();
-        return;
+      // Check and switch to BSC network
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      if (chainId !== '0x38') { // BSC Mainnet: 0x38 (56 decimal)
+        toast.error('Switching to Binance Smart Chain...');
+        
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x38' }],
+          });
+        } catch (switchError: any) {
+          // If network not added, add it
+          if (switchError.code === 4902) {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x38',
+                chainName: 'Binance Smart Chain Mainnet',
+                nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                rpcUrls: ['https://bsc-dataseed.binance.org/'],
+                blockExplorerUrls: ['https://bscscan.com/']
+              }]
+            });
+          } else {
+            throw switchError;
+          }
+        }
       }
       
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // Request accounts
+      // Request accounts - this will open wallet popup to select account
       const accounts = await window.ethereum.request({
         method: 'eth_requestAccounts',
       });
       
-      if (!accounts || accounts.length === 0) {
-        throw new Error('No accounts found');
-      }
-      
       setAccount(accounts[0]);
       toast.success('Wallet connected!');
       
-      // Fetch balances and sale info
-      await Promise.all([
-        fetchBalances(accounts[0], provider),
-        fetchSaleInfo(provider),
-      ]);
+      // Fetch balances
+      await fetchBalances(accounts[0], provider);
       
+      // Fetch sale info
+      await fetchSaleInfo(provider);
     } catch (error: any) {
       console.error('Error connecting wallet:', error);
       toast.error(error.message || 'Failed to connect wallet');
@@ -205,14 +190,19 @@ export default function TokenSale() {
       setSaleInfo(null);
       setTransactions([]);
       
-      // Request wallet to disconnect (if supported)
-      if (window.ethereum?.request) {
+      // Request MetaMask to disconnect (revoke permissions)
+      // This allows user to select different account on next connect
+      if (window.ethereum && window.ethereum.request) {
         try {
           await window.ethereum.request({
             method: 'wallet_revokePermissions',
-            params: [{ eth_accounts: {} }],
+            params: [{
+              eth_accounts: {},
+            }],
           });
         } catch (revokeError) {
+          // wallet_revokePermissions might not be supported in older MetaMask versions
+          // Fallback: just clear local state (already done above)
           console.log('Permission revoke not supported, using fallback');
         }
       }
@@ -224,14 +214,12 @@ export default function TokenSale() {
     }
   };
 
-  // Fetch balances with error handling
+  // Fetch balances
   const fetchBalances = async (address: string, provider: ethers.BrowserProvider) => {
     try {
-      // Fetch BNB balance
       const bnb = await provider.getBalance(address);
       setBnbBalance(ethers.formatEther(bnb));
 
-      // Fetch USDT balance (BSC USDT uses 18 decimals)
       const usdtContract = new ethers.Contract(
         USDT_ADDRESS,
         ['function balanceOf(address) view returns (uint256)'],
@@ -241,7 +229,6 @@ export default function TokenSale() {
       setUsdtBalance(ethers.formatUnits(usdt, 18));
     } catch (error) {
       console.error('Error fetching balances:', error);
-      toast.error('Failed to fetch wallet balances');
     }
   };
 
@@ -271,13 +258,12 @@ export default function TokenSale() {
       });
     } catch (error) {
       console.error('Error fetching sale info:', error);
-      toast.error('Failed to fetch sale information');
     }
   };
 
-  // Calculate cost based on token amount with safety checks
+  // Calculate cost based on token amount
   const calculateCost = () => {
-    if (!tokenAmount || tokenAmount.trim() === '') return '0';
+    if (!tokenAmount) return '0';
     
     const tokens = parseFloat(tokenAmount);
     if (isNaN(tokens) || tokens <= 0) return '0';
@@ -285,19 +271,9 @@ export default function TokenSale() {
     // Use token price from constants or contract
     const price = saleInfo ? parseFloat(saleInfo.tokenPrice) : TOKEN_PRICE_USD;
     
-    // Input validation
-    if (tokens > 1000000) {
-      toast.error('Maximum purchase is 1,000,000 tokens');
-      return '0';
-    }
-    
     if (paymentMethod === 'BNB') {
-      // Validate BNB price
-      if (!liveBnbPrice || liveBnbPrice <= 0) {
-        toast.error('Unable to calculate BNB price');
-        return '0';
-      }
-      
+      // Use live BNB price from CoinGecko
+      if (liveBnbPrice <= 0) return '0';
       const costInBnb = (tokens * price) / liveBnbPrice;
       return costInBnb.toFixed(6);
     } else {
@@ -306,21 +282,14 @@ export default function TokenSale() {
     }
   };
 
-  // Handle purchase with improved error handling
+  // Handle purchase
   const handlePurchase = async () => {
-    // Validation checks
     if (!account) {
       toast.error('Please connect your wallet first');
       return;
     }
     
-    if (!isCorrectNetwork) {
-      toast.error('Please switch to BSC Mainnet');
-      await switchToBSCNetwork();
-      return;
-    }
-    
-    if (!tokenAmount || tokenAmount.trim() === '') {
+    if (!tokenAmount) {
       toast.error('Please enter token amount');
       return;
     }
@@ -328,14 +297,8 @@ export default function TokenSale() {
     const tokens = parseFloat(tokenAmount);
     const minPurchase = saleInfo ? parseFloat(saleInfo.minPurchase) : 250;
 
-    // Input validation
     if (tokens < minPurchase) {
       toast.error(`Minimum purchase is ${minPurchase} tokens`);
-      return;
-    }
-
-    if (tokens > 1000000) {
-      toast.error('Maximum purchase is 1,000,000 tokens');
       return;
     }
 
@@ -349,66 +312,44 @@ export default function TokenSale() {
         signer
       );
 
-      // Calculate cost and validate
-      const calculatedCost = calculateCost();
-      if (calculatedCost === '0') {
-        throw new Error('Invalid cost calculation');
-      }
-
       let tx;
       const tokenAmountWei = ethers.parseUnits(tokenAmount, 18);
 
       if (paymentMethod === 'BNB') {
-        // Validate user has enough BNB
-        const requiredBNB = parseFloat(calculatedCost);
-        const userBNB = parseFloat(bnbBalance);
-        
-        if (userBNB < requiredBNB) {
-          throw new Error(`Insufficient BNB balance. Required: ${requiredBNB.toFixed(6)}, Available: ${userBNB.toFixed(4)}`);
-        }
-
-        const valueWei = ethers.parseEther(calculatedCost);
+        const costInBnb = calculateCost();
+        const valueWei = ethers.parseEther(costInBnb);
+        // buyWithBNB() doesn't take parameters - it calculates tokens from BNB sent
         tx = await contract.buyWithBNB({ value: valueWei });
       } else {
         // USDT purchase
         const usdtContract = new ethers.Contract(
           USDT_ADDRESS,
-          [
-            'function approve(address spender, uint256 amount) returns (bool)',
-            'function balanceOf(address) view returns (uint256)'
-          ],
+          ['function approve(address spender, uint256 amount) returns (bool)'],
           signer
         );
         
-        // Validate user has enough USDT
-        const requiredUSDT = parseFloat(calculatedCost);
-        const userUSDT = parseFloat(usdtBalance);
-        
-        if (userUSDT < requiredUSDT) {
-          throw new Error(`Insufficient USDT balance. Required: ${requiredUSDT.toFixed(2)}, Available: ${userUSDT.toFixed(2)}`);
-        }
-        
-        const usdtAmountWei = ethers.parseUnits(calculatedCost, 18);
+        const costInUsdt = calculateCost();
+        const usdtAmountWei = ethers.parseUnits(costInUsdt, 18);
         
         toast.info('Approving USDT...');
         const approveTx = await usdtContract.approve(TOKEN_SALE_CONTRACT_ADDRESS, usdtAmountWei);
         await approveTx.wait();
         
         toast.info('Purchasing tokens...');
-        tx = await contract.buyWithUSDT(tokenAmountWei);
+        // buyWithUSDC takes USDT amount, not token amount
+        tx = await contract.buyWithUSDC(usdtAmountWei);
       }
 
       // Add to transactions
-      const newTransaction: Transaction = {
+      setTransactions(prev => [{
         hash: tx.hash,
         buyer: account,
         amount: tokenAmount,
         paymentMethod,
         timestamp: Date.now(),
         status: 'pending'
-      };
-      
-      setTransactions(prev => [newTransaction, ...prev]);
+      }, ...prev]);
+
       toast.info('Transaction submitted...');
 
       // Wait for confirmation
@@ -426,27 +367,14 @@ export default function TokenSale() {
         setTokenAmount('');
         
         // Refresh data
-        await Promise.all([
-          fetchBalances(account, provider),
-          fetchSaleInfo(provider),
-        ]);
+        await fetchBalances(account, provider);
+        await fetchSaleInfo(provider);
       } else {
-        toast.error('Transaction failed on-chain');
+        toast.error('Transaction failed');
       }
     } catch (error: any) {
       console.error('Error purchasing tokens:', error);
-      
-      // User-friendly error messages
-      let errorMessage = 'Failed to purchase tokens';
-      if (error.code === 'INSUFFICIENT_FUNDS') {
-        errorMessage = 'Insufficient funds for transaction';
-      } else if (error.code === 'ACTION_REJECTED') {
-        errorMessage = 'Transaction rejected by user';
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      toast.error(errorMessage);
+      toast.error(error.message || 'Failed to purchase tokens');
       
       // Update last transaction as failed
       setTransactions(prev =>
@@ -462,57 +390,18 @@ export default function TokenSale() {
     if (!saleInfo) return 0;
     const sold = parseFloat(saleInfo.totalSold);
     const max = parseFloat(saleInfo.maxTokens);
-    return max > 0 ? (sold / max) * 100 : 0;
+    return (sold / max) * 100;
   };
 
   // Format number with commas
   const formatNumber = (num: string) => {
-    const number = parseFloat(num);
-    if (isNaN(number)) return '0';
-    return number.toLocaleString('en-US', { 
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2 
-    });
+    return parseFloat(num).toLocaleString('en-US', { maximumFractionDigits: 2 });
   };
 
   // Format address
   const formatAddress = (address: string) => {
-    if (!address || address.length < 10) return address;
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
-
-  // Handle wallet events
-  useEffect(() => {
-    if (!window.ethereum) return;
-
-    const handleAccountsChanged = (accounts: string[]) => {
-      if (accounts.length > 0) {
-        setAccount(accounts[0]);
-        const provider = new ethers.BrowserProvider(window.ethereum!);
-        fetchBalances(accounts[0], provider);
-        fetchSaleInfo(provider);
-      } else {
-        // User disconnected wallet
-        setAccount('');
-        setSaleInfo(null);
-        setTransactions([]);
-        setBnbBalance('0');
-        setUsdtBalance('0');
-      }
-    };
-
-    const handleChainChanged = () => {
-      window.location.reload(); // Reload on network change
-    };
-
-    window.ethereum.on('accountsChanged', handleAccountsChanged);
-    window.ethereum.on('chainChanged', handleChainChanged);
-
-    return () => {
-      window.ethereum?.removeListener('accountsChanged', handleAccountsChanged);
-      window.ethereum?.removeListener('chainChanged', handleChainChanged);
-    };
-  }, []);
 
   // Auto-connect on load
   useEffect(() => {
@@ -523,11 +412,10 @@ export default function TokenSale() {
           const provider = new ethers.BrowserProvider(window.ethereum!);
           fetchBalances(accounts[0], provider);
           fetchSaleInfo(provider);
-          checkNetwork();
         }
       });
     }
-  }, [checkNetwork]);
+  }, []);
 
   const faqItems = [
     {
@@ -594,16 +482,6 @@ export default function TokenSale() {
           
           {account ? (
             <div className="flex items-center gap-3">
-              {!isCorrectNetwork && (
-                <Button
-                  onClick={switchToBSCNetwork}
-                  variant="destructive"
-                  size="sm"
-                  className="rounded-full"
-                >
-                  Switch to BSC
-                </Button>
-              )}
               <div className="hidden md:flex flex-col items-end">
                 <p className="text-sm font-medium text-gray-900">{formatAddress(account)}</p>
                 <p className="text-xs text-gray-500">{parseFloat(bnbBalance).toFixed(4)} BNB</p>
@@ -644,26 +522,6 @@ export default function TokenSale() {
           )}
         </div>
       </header>
-
-      {/* Network Warning Banner */}
-      {account && !isCorrectNetwork && (
-        <div className="bg-red-500 text-white">
-          <div className="container mx-auto px-4 py-2 flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">⚠️ Wrong Network</span>
-              <span>Please switch to Binance Smart Chain (BSC) Mainnet</span>
-            </div>
-            <Button
-              onClick={switchToBSCNetwork}
-              variant="secondary"
-              size="sm"
-              className="text-red-500 bg-white hover:bg-gray-100"
-            >
-              Switch to BSC
-            </Button>
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-12">
@@ -748,16 +606,14 @@ export default function TokenSale() {
                         value={tokenAmount}
                         onChange={(e) => {
                           const value = e.target.value;
-                          if (parseFloat(value) > 1000000) {
+                          if (value && parseFloat(value) > 1000000) {
                             toast.error('Maximum purchase is 1,000,000 tokens');
                             return;
                           }
                           setTokenAmount(value);
                         }}
                         min="250"
-                        max="1000000"
-                        step="1"
-                        disabled={!account || !isCorrectNetwork}
+                        disabled={!account}
                         className="rounded-2xl h-12 text-base"
                       />
                       <p className="text-sm text-gray-600">
@@ -789,16 +645,14 @@ export default function TokenSale() {
                         value={tokenAmount}
                         onChange={(e) => {
                           const value = e.target.value;
-                          if (parseFloat(value) > 1000000) {
+                          if (value && parseFloat(value) > 1000000) {
                             toast.error('Maximum purchase is 1,000,000 tokens');
                             return;
                           }
                           setTokenAmount(value);
                         }}
                         min="250"
-                        max="1000000"
-                        step="1"
-                        disabled={!account || !isCorrectNetwork}
+                        disabled={!account}
                         className="rounded-2xl h-12 text-base"
                       />
                       <p className="text-sm text-gray-600">
@@ -823,7 +677,7 @@ export default function TokenSale() {
 
                 <Button
                   onClick={handlePurchase}
-                  disabled={!account || isLoading || !tokenAmount || !isCorrectNetwork}
+                  disabled={!account || isLoading || !tokenAmount}
                   className="w-full rounded-full h-14 text-lg font-bold text-white"
                   style={{ background: '#000000' }}
                   size="lg"
@@ -833,8 +687,6 @@ export default function TokenSale() {
                       <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                       Processing...
                     </>
-                  ) : !isCorrectNetwork ? (
-                    'Switch to BSC Network'
                   ) : (
                     `Purchase with ${paymentMethod}`
                   )}
@@ -842,7 +694,7 @@ export default function TokenSale() {
 
                 {saleInfo && (
                   <p className="text-sm text-center text-gray-600">
-                    Minimum purchase: {formatNumber(saleInfo.minPurchase)} EXN tokens • Maximum: 1,000,000 EXN
+                    Minimum purchase: {formatNumber(saleInfo.minPurchase)} EXN tokens
                   </p>
                 )}
               </CardContent>
@@ -897,6 +749,8 @@ export default function TokenSale() {
           </div>
         </div>
 
+
+
         {/* FAQ Section */}
         <div className="mt-16 max-w-4xl mx-auto">
           <div className="text-center mb-8">
@@ -919,4 +773,119 @@ export default function TokenSale() {
                   >
                     <CollapsibleTrigger className="w-full">
                       <div className="flex items-center justify-between p-4 rounded-2xl hover:bg-gray-50 transition-colors cursor-pointer border border-gray-200">
-                        <h3 className="text-left font-semibold text-gray-
+                        <h3 className="text-left font-semibold text-gray-900 text-base">
+                          {item.question}
+                        </h3>
+                        <ChevronDown
+                          className={`w-5 h-5 text-gray-500 transition-transform ${
+                            openFaqIndex === index ? 'transform rotate-180' : ''
+                          }`}
+                        />
+                      </div>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <div className="px-4 pb-4 pt-2 text-gray-600 text-base leading-relaxed">
+                        {item.answer}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Footer */}
+        <footer className="mt-16 text-center text-gray-600 pb-8">
+          <p className="text-sm">
+            © 2024 Expoin. All rights reserved. |{' '}
+            <a href="https://expoin.io" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900 underline">
+              expoin.io
+            </a>
+          </p>
+        </footer>
+      </main>
+
+      {/* Wallet Selection Modal */}
+      <Dialog open={showWalletModal} onOpenChange={setShowWalletModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold">Connect Wallet</DialogTitle>
+            <DialogDescription>
+              Choose your preferred wallet to connect
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-4">
+            {/* MetaMask */}
+            <Button
+              onClick={() => connectWallet('metamask')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-orange-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">MetaMask</div>
+                  <div className="text-sm text-gray-500">Connect with MetaMask</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* Trust Wallet */}
+            <Button
+              onClick={() => connectWallet('trustwallet')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">Trust Wallet</div>
+                  <div className="text-sm text-gray-500">Connect with Trust Wallet</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* WalletConnect */}
+            <Button
+              onClick={() => connectWallet('walletconnect')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-purple-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">WalletConnect</div>
+                  <div className="text-sm text-gray-500">Scan with WalletConnect</div>
+                </div>
+              </div>
+            </Button>
+
+            {/* Other Wallets */}
+            <Button
+              onClick={() => connectWallet('injected')}
+              variant="outline"
+              className="w-full h-16 justify-start text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-gray-600" />
+                </div>
+                <div>
+                  <div className="font-semibold">Other Wallets</div>
+                  <div className="text-sm text-gray-500">Connect with browser wallet</div>
+                </div>
+              </div>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
