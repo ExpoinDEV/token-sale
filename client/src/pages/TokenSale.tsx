@@ -353,7 +353,7 @@ export default function TokenSale() {
         
         toast.info('Purchasing tokens with USDT...');
         // buyWithUSDC takes USDT amount (contract method name is historical)
-        tx = await contract.buyWithUSDC(usdtAmountWei);
+        tx = await contract.buyTokens(usdtAmountWei);
       }
 
       // Add to transactions
