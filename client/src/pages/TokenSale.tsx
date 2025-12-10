@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+
 import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -34,11 +34,11 @@ export default function TokenSale() {
   const [account, setAccount] = useState<string>('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [tokenAmount, setTokenAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'BNB' | 'USDT'>('BNB');
+
   const [isLoading, setIsLoading] = useState(false);
   const [saleInfo, setSaleInfo] = useState<SaleInfo | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [bnbBalance, setBnbBalance] = useState('0');
+
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [liveBnbPrice, setLiveBnbPrice] = useState<number>(0);
@@ -89,7 +89,7 @@ export default function TokenSale() {
         } else {
           // User disconnected wallet
           setAccount('');
-          setBnbBalance('0');
+    
           setUsdtBalance('0');
           setSaleInfo(null);
         }
@@ -191,7 +191,7 @@ export default function TokenSale() {
       // Clear local state
       setAccount('');
       setTokenAmount('');
-      setBnbBalance('0');
+
       setUsdtBalance('0');
       setSaleInfo(null);
       setTransactions([]);
@@ -223,8 +223,6 @@ export default function TokenSale() {
   // Fetch balances
   const fetchBalances = async (address: string, provider: ethers.BrowserProvider) => {
     try {
-      const bnb = await provider.getBalance(address);
-      setBnbBalance(ethers.formatEther(bnb));
 
       const usdtContract = new ethers.Contract(
         USDT_ADDRESS,
@@ -276,16 +274,8 @@ export default function TokenSale() {
     
     // Use token price from constants or contract
     const price = saleInfo ? parseFloat(saleInfo.tokenPrice) : TOKEN_PRICE_USD;
-    
-    if (paymentMethod === 'BNB') {
-      // Use live BNB price from CoinGecko
-      if (liveBnbPrice <= 0) return '0';
-      const costInBnb = (tokens * price) / liveBnbPrice;
-      return costInBnb.toFixed(6);
-    } else {
-      const costInUsdt = tokens * price;
-      return costInUsdt.toFixed(2);
-    }
+    // USDT only
+    return (tokens * price).toFixed(2);
   };
 
   // Handle purchase
@@ -324,50 +314,37 @@ export default function TokenSale() {
         signer
       );
 
-      let tx;
-      const tokenAmountWei = ethers.parseUnits(tokenAmount, 18);
-
-      if (paymentMethod === 'BNB') {
-        // Get exact BNB amount needed from contract
-        const bnbNeeded = await contract.getBNBForTokens(tokenAmountWei);
-        
-        toast.info(`Purchasing ${tokenAmount} EXN for ${ethers.formatEther(bnbNeeded)} BNB...`);
-        
-        // buyWithBNB() doesn't take parameters - it calculates tokens from BNB sent
-        tx = await contract.buyWithBNB({ value: bnbNeeded });
-      } else {
-        // USDT purchase
-        const usdtContract = new ethers.Contract(
-          USDT_ADDRESS,
-          ['function approve(address spender, uint256 amount) returns (bool)', 'function balanceOf(address) view returns (uint256)'],
-          signer
-        );
-        
-        const costInUsdt = calculateCost();
-        const usdtAmountWei = ethers.parseUnits(costInUsdt, 18);
-        
-        // Check USDT balance
-        const usdtBalance = await usdtContract.balanceOf(account);
-        if (usdtBalance < usdtAmountWei) {
-          toast.error(`Insufficient USDT balance. You need ${costInUsdt} USDT (Tether USD on BSC, not USDC).`);
-          return;
-        }
-        
-        toast.info('Approving USDT (Tether USD)...');
-        const approveTx = await usdtContract.approve(TOKEN_SALE_CONTRACT_ADDRESS, usdtAmountWei);
-        await approveTx.wait();
-        
-        toast.info('Purchasing tokens with USDT...');
-        // buyWithUSDC takes USDT amount (contract method name is historical)
-        tx = await contract.buyWithUSDC(usdtAmountWei);
+      // USDT purchase only
+      const usdtContract = new ethers.Contract(
+        USDT_ADDRESS,
+        ['function approve(address spender, uint256 amount) returns (bool)', 'function balanceOf(address) view returns (uint256)'],
+        signer
+      );
+      
+      const costInUsdt = calculateCost();
+      const usdtAmountWei = ethers.parseUnits(costInUsdt, 18);
+      
+      // Check USDT balance
+      const usdtBalance = await usdtContract.balanceOf(account);
+      if (usdtBalance < usdtAmountWei) {
+        toast.error(`Insufficient USDT balance. You need ${costInUsdt} USDT (Tether USD on BSC).`);
+        return;
       }
+      
+      toast.info('Approving USDT...');
+      const approveTx = await usdtContract.approve(TOKEN_SALE_CONTRACT_ADDRESS, usdtAmountWei);
+      await approveTx.wait();
+      
+      toast.info('Purchasing tokens with USDT...');
+      // Use buyTokens(usdtAmount) from TokenSaleV3
+      const tx = await contract.buyTokens(usdtAmountWei);
 
       // Add to transactions
       setTransactions(prev => [{
         hash: tx.hash,
         buyer: account,
         amount: tokenAmount,
-        paymentMethod,
+        paymentMethod: 'USDT',
         timestamp: Date.now(),
         status: 'pending'
       }, ...prev]);
@@ -506,7 +483,7 @@ export default function TokenSale() {
             <div className="flex items-center gap-3">
               <div className="hidden md:flex flex-col items-end">
                 <p className="text-sm font-medium text-gray-900">{formatAddress(account)}</p>
-                <p className="text-xs text-gray-500">{parseFloat(bnbBalance).toFixed(4)} BNB</p>
+                <p className="text-xs text-gray-500">{parseFloat(usdtBalance).toFixed(2)} USDT</p>
               </div>
               <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)' }}>
                 <Wallet className="w-5 h-5 text-white" />
@@ -608,57 +585,11 @@ export default function TokenSale() {
               <CardHeader>
                 <CardTitle className="text-2xl">Purchase Tokens</CardTitle>
                 <CardDescription className="text-base">
-                  Buy EXN tokens using BNB or USDT on BSC network
+                  Buy EXN tokens using USDT on BSC network
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                <Tabs value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as 'BNB' | 'USDT')}>
-                  <TabsList className="grid w-full grid-cols-2 rounded-2xl p-1 h-auto">
-                    <TabsTrigger value="BNB" className="rounded-xl py-3 text-base font-medium">Pay with BNB</TabsTrigger>
-                    <TabsTrigger value="USDT" className="rounded-xl py-3 text-base font-medium">Pay with USDT (Tether)</TabsTrigger>
-                  </TabsList>
-                  
-                  <TabsContent value="BNB" className="space-y-4 mt-6">
-                    <div className="space-y-2">
-                      <Label htmlFor="token-amount" className="text-base font-medium">Token Amount</Label>
-                      <Input
-                        id="token-amount"
-                        type="number"
-                        placeholder={`Min: ${saleInfo?.minPurchase || '40'}`}
-                        value={tokenAmount}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          const numValue = parseFloat(value);
-                          if (numValue > MAX_PURCHASE_TOKENS) {
-                            toast.error(`Maximum purchase is ${MAX_PURCHASE_TOKENS.toLocaleString()} tokens`);
-                            return;
-                          }
-                          setTokenAmount(value);
-                        }}
-                        min="40"
-                        disabled={!account}
-                        className="rounded-2xl h-12 text-base"
-                      />
-                      <p className="text-sm text-gray-600">
-                        Available: {parseFloat(bnbBalance).toFixed(4)} BNB
-                      </p>
-                    </div>
-
-                    {tokenAmount && (
-                      <div className="p-5 rounded-2xl space-y-3" style={{ background: '#F3F4F6' }}>
-                        <div className="flex justify-between text-base">
-                          <span className="text-gray-600">You pay:</span>
-                          <span className="font-bold text-gray-900">{calculateCost()} BNB</span>
-                        </div>
-                        <div className="flex justify-between text-base">
-                          <span className="text-gray-600">You receive:</span>
-                          <span className="font-bold text-gray-900">{formatNumber(tokenAmount)} EXN</span>
-                        </div>
-                      </div>
-                    )}
-                  </TabsContent>
-
-                  <TabsContent value="USDT" className="space-y-4 mt-6">
+                <div className="space-y-6">
                     <div className="space-y-2">
                       <Label htmlFor="token-amount-usdt" className="text-base font-medium">Token Amount</Label>
                       <Input
@@ -696,8 +627,7 @@ export default function TokenSale() {
                         </div>
                       </div>
                     )}
-                  </TabsContent>
-                </Tabs>
+                </div>
 
                 <Button
                   onClick={handlePurchase}
@@ -712,7 +642,7 @@ export default function TokenSale() {
                       Processing...
                     </>
                   ) : (
-                    `Purchase with ${paymentMethod}`
+                    'Purchase with USDT'
                   )}
                 </Button>
 
