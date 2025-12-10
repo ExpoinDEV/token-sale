@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from 'sonner';
 import { Loader2, Wallet, TrendingUp, Users, Clock, CheckCircle2, XCircle, LogOut, ChevronDown } from 'lucide-react';
 import TokenSaleABI from '../abi/TokenSaleContract.json';
-import { TOKEN_SALE_CONTRACT_ADDRESS, USDT_ADDRESS, TOKEN_PRICE_USD } from '../web-utils/constants';
+import { TOKEN_SALE_CONTRACT_ADDRESS, USDT_ADDRESS, TOKEN_PRICE_USD, MIN_PURCHASE_TOKENS, MAX_PURCHASE_TOKENS, BSC_CHAIN_ID } from '../web-utils/constants';
 
 interface SaleInfo {
   totalSold: string;
@@ -301,10 +301,16 @@ export default function TokenSale() {
     }
 
     const tokens = parseFloat(tokenAmount);
-    const minPurchase = saleInfo ? parseFloat(saleInfo.minPurchase) : 250;
+    const minPurchase = saleInfo ? parseFloat(saleInfo.minPurchase) : MIN_PURCHASE_TOKENS;
+    const maxPurchase = MAX_PURCHASE_TOKENS;
 
     if (tokens < minPurchase) {
-      toast.error(`Minimum purchase is ${minPurchase} tokens`);
+      toast.error(`Minimum purchase is ${minPurchase} tokens ($${(minPurchase * TOKEN_PRICE_USD).toFixed(2)})`);
+      return;
+    }
+
+    if (tokens > maxPurchase) {
+      toast.error(`Maximum purchase is ${maxPurchase.toLocaleString()} tokens ($${(maxPurchase * TOKEN_PRICE_USD).toLocaleString()})`);
       return;
     }
 
@@ -321,7 +327,15 @@ export default function TokenSale() {
       let tx;
       const tokenAmountWei = ethers.parseUnits(tokenAmount, 18);
 
-      
+      if (paymentMethod === 'BNB') {
+        // Get exact BNB amount needed from contract
+        const bnbNeeded = await contract.getBNBForTokens(tokenAmountWei);
+        
+        toast.info(`Purchasing ${tokenAmount} EXN for ${ethers.formatEther(bnbNeeded)} BNB...`);
+        
+        // buyWithBNB() doesn't take parameters - it calculates tokens from BNB sent
+        tx = await contract.buyWithBNB({ value: bnbNeeded });
+      } else {
         // USDT purchase
         const usdtContract = new ethers.Contract(
           USDT_ADDRESS,
@@ -345,7 +359,7 @@ export default function TokenSale() {
         
         toast.info('Purchasing tokens with USDT...');
         // buyWithUSDC takes USDT amount (contract method name is historical)
-        tx = await contract.buyTokens(usdtAmountWei);
+        tx = await contract.buyWithUSDC(usdtAmountWei);
       }
 
       // Add to transactions
@@ -610,17 +624,18 @@ export default function TokenSale() {
                       <Input
                         id="token-amount"
                         type="number"
-                        placeholder={`Min: ${saleInfo?.minPurchase || '250'}`}
+                        placeholder={`Min: ${saleInfo?.minPurchase || '40'}`}
                         value={tokenAmount}
                         onChange={(e) => {
                           const value = e.target.value;
-                          if (value && parseFloat(value) > 1000000) {
-                            toast.error('Maximum purchase is 1,000,000 tokens');
+                          const numValue = parseFloat(value);
+                          if (numValue > MAX_PURCHASE_TOKENS) {
+                            toast.error(`Maximum purchase is ${MAX_PURCHASE_TOKENS.toLocaleString()} tokens`);
                             return;
                           }
                           setTokenAmount(value);
                         }}
-                        min="250"
+                        min="40"
                         disabled={!account}
                         className="rounded-2xl h-12 text-base"
                       />
@@ -649,17 +664,18 @@ export default function TokenSale() {
                       <Input
                         id="token-amount-usdt"
                         type="number"
-                        placeholder={`Min: ${saleInfo?.minPurchase || '250'}`}
+                        placeholder={`Min: ${saleInfo?.minPurchase || '40'}`}
                         value={tokenAmount}
                         onChange={(e) => {
                           const value = e.target.value;
-                          if (value && parseFloat(value) > 1000000) {
-                            toast.error('Maximum purchase is 1,000,000 tokens');
+                          const numValue = parseFloat(value);
+                          if (numValue > MAX_PURCHASE_TOKENS) {
+                            toast.error(`Maximum purchase is ${MAX_PURCHASE_TOKENS.toLocaleString()} tokens`);
                             return;
                           }
                           setTokenAmount(value);
                         }}
-                        min="250"
+                        min="40"
                         disabled={!account}
                         className="rounded-2xl h-12 text-base"
                       />
