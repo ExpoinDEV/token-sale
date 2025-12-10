@@ -321,15 +321,7 @@ export default function TokenSale() {
       let tx;
       const tokenAmountWei = ethers.parseUnits(tokenAmount, 18);
 
-      if (paymentMethod === 'BNB') {
-        // Get exact BNB amount needed from contract
-        const bnbNeeded = await contract.getBNBForTokens(tokenAmountWei);
-        
-        toast.info(`Purchasing ${tokenAmount} EXN for ${ethers.formatEther(bnbNeeded)} BNB...`);
-        
-        // buyWithBNB() doesn't take parameters - it calculates tokens from BNB sent
-        tx = await contract.buyWithBNB({ value: bnbNeeded });
-      } else {
+      
         // USDT purchase
         const usdtContract = new ethers.Contract(
           USDT_ADDRESS,
