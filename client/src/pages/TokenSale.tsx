@@ -484,12 +484,7 @@ export default function TokenSale() {
                         type="number"
                         placeholder={`Min: ${saleInfo?.minPurchase || '250'}`}
                         value={tokenAmount}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          if (value === '' || parseFloat(value) >= 250) {
-                            setTokenAmount(value);
-                          }
-                        }}
+                        onChange={(e) => setTokenAmount(e.target.value)}
                         min="250"
                         disabled={!account}
                         className="rounded-2xl h-12 text-base"
@@ -521,12 +516,7 @@ export default function TokenSale() {
                         type="number"
                         placeholder={`Min: ${saleInfo?.minPurchase || '250'}`}
                         value={tokenAmount}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          if (value === '' || parseFloat(value) >= 250) {
-                            setTokenAmount(value);
-                          }
-                        }}
+                        onChange={(e) => setTokenAmount(e.target.value)}
                         min="250"
                         disabled={!account}
                         className="rounded-2xl h-12 text-base"
