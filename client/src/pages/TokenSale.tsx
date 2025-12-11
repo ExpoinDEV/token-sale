@@ -37,16 +37,32 @@ export default function TokenSale() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [saleInfo, setSaleInfo] = useState<SaleInfo | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    // Load from localStorage on mount
-    const saved = localStorage.getItem('exn-transactions');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [liveBnbPrice, setLiveBnbPrice] = useState<number>(0);
   const [showWalletModal, setShowWalletModal] = useState(false);
+
+  // Helper to get storage key
+  const getStorageKey = () => account ? `exn-transactions-${account.toLowerCase()}` : 'exn-transactions-temp';
+
+  // Load transactions when account changes
+  useEffect(() => {
+    if (account) {
+      const saved = localStorage.getItem(getStorageKey());
+      setTransactions(saved ? JSON.parse(saved) : []);
+    } else {
+      setTransactions([]);
+    }
+  }, [account]);
+
+  // Save transactions to localStorage whenever they change
+  useEffect(() => {
+    if (account && transactions.length > 0) {
+      localStorage.setItem(getStorageKey(), JSON.stringify(transactions));
+    }
+  }, [transactions, account]);
 
   // Fetch BNB price from CoinGecko
   const fetchBnbPrice = async () => {
@@ -73,11 +89,6 @@ export default function TokenSale() {
     }
   };
 
-  // Save transactions to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem('exn-transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
   // Fetch BNB price on mount and every 30 seconds
   useEffect(() => {
     fetchBnbPrice();
@@ -95,12 +106,14 @@ export default function TokenSale() {
           const provider = new ethers.BrowserProvider(window.ethereum!);
           await fetchBalances(accounts[0], provider);
           await fetchSaleInfo(provider);
+          // Transactions will load in useEffect above
         } else {
           // User disconnected wallet
           setAccount('');
     
           setUsdtBalance('0');
           setSaleInfo(null);
+          setTransactions([]);
         }
       };
       
@@ -406,6 +419,14 @@ export default function TokenSale() {
     return (sold / max) * 100;
   };
 
+  // Calculate remaining tokens
+  const getRemaining = () => {
+    if (!saleInfo) return '0';
+    const sold = parseFloat(saleInfo.totalSold);
+    const max = parseFloat(saleInfo.maxTokens);
+    return (max - sold).toFixed(0);
+  };
+
   // Format number with commas
   const formatNumber = (num: string) => {
     return parseFloat(num).toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -553,12 +574,12 @@ export default function TokenSale() {
           <div className="rounded-3xl shadow-lg overflow-hidden p-6" style={{ background: 'linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)' }}>
             <div className="flex items-center gap-2 mb-3">
               <TrendingUp className="w-4 h-4 text-white/80" />
-              <p className="text-sm font-medium text-white/80">Total Sold</p>
+              <p className="text-sm font-medium text-white/80">Sale Progress</p>
             </div>
             <p className="text-4xl font-bold text-white">
-              {saleInfo ? formatNumber(saleInfo.totalSold) : '0'}
+              {saleInfo ? formatNumber(getRemaining()) : '0'}
             </p>
-            <p className="text-sm text-white/80 mt-1">EXN Tokens</p>
+            <p className="text-sm text-white/80 mt-1">EXN Tokens Remaining</p>
           </div>
 
           <div className="rounded-3xl shadow-lg overflow-hidden p-6" style={{ background: 'linear-gradient(135deg, #6B5DD3 0%, #9D8FE8 100%)' }}>
@@ -777,7 +798,7 @@ export default function TokenSale() {
         {/* Footer */}
         <footer className="mt-16 text-center text-gray-600 pb-8">
           <p className="text-sm">
-            © 2025 Expoin. All rights reserved. |{' '}
+            © 2024 Expoin. All rights reserved. |{' '}
             <a href="https://expoin.io" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900 underline">
               expoin.io
             </a>
