@@ -185,51 +185,18 @@ export default function TokenSale() {
         throw new Error('No accounts found');
       }
       
-      // Check and switch to BSC network after account is selected
+      // Check network
       const chainId = await window.ethereum.request({ method: 'eth_chainId' });
       if (chainId !== '0x38') { // BSC Mainnet: 0x38 (56 decimal)
-        toast.info('Switching to Binance Smart Chain...');
-        
-        try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: '0x38' }],
-          });
-          // Wait a moment for the wallet to stabilize after network switch
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (switchError: any) {
-          // If network not added, add it
-          if (switchError.code === 4902) {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: '0x38',
-                chainName: 'Binance Smart Chain Mainnet',
-                nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-                rpcUrls: ['https://bsc-dataseed.binance.org/'],
-                blockExplorerUrls: ['https://bscscan.com/']
-              }]
-            });
-            // Wait a moment for the wallet to stabilize after network add
-            await new Promise(resolve => setTimeout(resolve, 500));
-          } else if (switchError.code === 4001) {
-            // User rejected network switch
-            toast.error('Please switch to BSC network to continue');
-            setIsConnecting(false);
-            return;
-          } else {
-            throw switchError;
-          }
-        }
+        toast.error('Please switch your wallet to Binance Smart Chain (BSC) network to continue.');
+        setIsConnecting(false);
+        return;
       }
       
       const provider = new ethers.BrowserProvider(window.ethereum);
       
       setAccount(accounts[0]);
       toast.success('Wallet connected!');
-      
-      // Wait a moment for the wallet to stabilize after connection
-      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Fetch balances and sale info
       try {
