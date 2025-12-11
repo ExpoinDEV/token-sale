@@ -4,8 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Loader2, Wallet, TrendingUp, Clock, CheckCircle2, XCircle, LogOut } from 'lucide-react';
 
@@ -38,22 +37,20 @@ export default function TokenSale() {
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [showWalletModal, setShowWalletModal] = useState(false);
 
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  // Ключ для localStorage — по адресу кошелька
+  const getStorageKey = () => `exn-transactions-${account?.toLowerCase()}`;
 
-  // Уникальный ключ в localStorage для каждого адреса
-  const getStorageKey = () => `exn-transactions-${account?.toLowerCase() || 'temp'}`;
-
-  // Загрузка транзакций при подключении/смене кошелька
+  // Загрузка транзакций при подключении кошелька
   useEffect(() => {
     if (account) {
-      try {
-        const saved = localStorage.getItem(getStorageKey());
-        if (saved) {
+      const saved = localStorage.getItem(getStorageKey());
+      if (saved) {
+        try {
           const parsed = JSON.parse(saved);
           setTransactions(Array.isArray(parsed) ? parsed : []);
+        } catch (e) {
+          setTransactions([]);
         }
-      } catch (e) {
-        setTransactions([]);
       }
     } else {
       setTransactions([]);
@@ -67,21 +64,17 @@ export default function TokenSale() {
     }
   }, [transactions, account]);
 
-  // Подключение кошелька — работает на всех устройствах
+  // Подключение кошелька — старый способ с модалкой
   const connectWallet = async () => {
     setShowWalletModal(false);
 
     if ((window as any).phantom?.ethereum) {
-      toast.error('Phantom wallet not supported');
+      toast.error('Phantom not supported');
       return;
     }
 
     if (!window.ethereum) {
-      if (isMobile) {
-        window.location.href = `https://metamask.app.link/dapp/${window.location.hostname}${window.location.pathname}`;
-      } else {
-        toast.error('Please install MetaMask or Trust Wallet');
-      }
+      toast.error('No wallet found. Install MetaMask or Trust Wallet');
       return;
     }
 
@@ -102,14 +95,12 @@ export default function TokenSale() {
               method: 'wallet_addEthereumChain',
               params: [{
                 chainId: '0x38',
-                chainName: 'Binance Smart Chain Mainnet',
+                chainName: 'Binance Smart Chain',
                 nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
                 rpcUrls: ['https://bsc-dataseed.binance.org/'],
                 blockExplorerUrls: ['https://bscscan.com']
               }]
             });
-          } else {
-            throw e;
           }
         }
       }
@@ -117,13 +108,13 @@ export default function TokenSale() {
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
       const addr = accounts[0];
       setAccount(addr);
-      toast.success('Wallet connected!');
+      toast.success('Connected!');
 
       const provider = new ethers.BrowserProvider(window.ethereum);
       await fetchBalances(addr, provider);
       await fetchSaleInfo(provider);
-    } catch (error: any) {
-      toast.error(error.message || 'Connection failed');
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to connect');
     } finally {
       setIsConnecting(false);
     }
@@ -135,22 +126,15 @@ export default function TokenSale() {
     setUsdtBalance('0');
     setSaleInfo(null);
     setTransactions([]);
-    localStorage.removeItem(getStorageKey());
-    toast.success('Wallet disconnected');
+    toast.success('Disconnected');
   };
 
-  const fetchBalances = async (address: string, provider: ethers.BrowserProvider) => {
+  const fetchBalances = async (addr: string, provider: ethers.BrowserProvider) => {
     try {
-      const usdt = new ethers.Contract(
-        USDT_ADDRESS,
-        ['function balanceOf(address) view returns (uint256)'],
-        provider
-      );
-      const bal = await usdt.balanceOf(address);
+      const usdt = new ethers.Contract(USDT_ADDRESS, ['function balanceOf(address) view returns (uint256)'], provider);
+      const bal = await usdt.balanceOf(addr);
       setUsdtBalance(ethers.formatUnits(bal, 18));
-    } catch (e) {
-      console.error('Balance fetch error:', e);
-    }
+    } catch (e) {}
   };
 
   const fetchSaleInfo = async (provider: ethers.BrowserProvider) => {
@@ -159,14 +143,17 @@ export default function TokenSale() {
       const id = await contract.currentRoundId();
       const info = await contract.saleRounds(id);
 
+      const sold = Number(ethers.formatUnits(info.sold, 18));
+      const total = Number(ethers.formatUnits(info.allocation, 18));
+
       setSaleInfo({
-        totalSold: ethers.formatUnits(info.sold, 18),
-        maxTokens: ethers.formatUnits(info.allocation, 18),
+        totalSold: sold.toFixed(0),
+        maxTokens: total.toFixed(0),
         minPurchase: ethers.formatUnits(info.minPurchase, 18),
         tokenPrice: ethers.formatUnits(info.price, 18),
       });
     } catch (e) {
-      console.error('Sale info fetch error:', e);
+      console.error(e);
     }
   };
 
@@ -179,96 +166,86 @@ export default function TokenSale() {
   };
 
   const handleMax = () => {
-    const bal = parseFloat(usdtBalance) || 0;
+    const bal = parseFloat(usdtBalance);
     const max = Math.min(10000, bal);
     if (max >= 1) setUsdtAmount(max.toString());
   };
 
   const handlePurchase = async () => {
-    if (!account) return toast.error('Connect wallet first');
-    if (!usdtAmount) return toast.error('Enter USDT amount');
+    if (!account) return toast.error('Connect wallet');
+    if (!usdtAmount) return toast.error('Enter amount');
 
-    const amount = parseFloat(usdtAmount);
-    if (amount < 1) return toast.error('Minimum 1 USDT');
-    if (amount > 10000) return toast.error('Maximum 10,000 USDT');
+    const amt = parseFloat(usdtAmount);
+    if (amt < 1) return toast.error('Min 1 USDT');
+    if (amt > 10000) return toast.error('Max 10,000 USDT');
 
     try {
       setIsLoading(true);
       const provider = new ethers.BrowserProvider(window.ethereum!);
       const signer = await provider.getSigner();
 
-      const usdtContract = new ethers.Contract(
-        USDT_ADDRESS,
-        [
-          'function approve(address spender, uint256 amount) returns (bool)',
-          'function balanceOf(address) view returns (uint256)'
-        ],
-        signer
-      );
+      const usdt = new ethers.Contract(USDT_ADDRESS, [
+        'function approve(address,uint256) returns (bool)',
+        'function balanceOf(address) view returns (uint256)'
+      ], signer);
 
-      const amountWei = ethers.parseUnits(usdtAmount, 18);
-      const balance = await usdtContract.balanceOf(account);
-      if (balance < amountWei) return toast.error('Insufficient USDT');
+      const wei = ethers.parseUnits(usdtAmount, 18);
+      const bal = await usdt.balanceOf(account);
+      if (bal < wei) return toast.error('Not enough USDT');
 
-      toast.info('Approving USDT...');
-      await (await usdtContract.approve(TOKEN_SALE_CONTRACT_ADDRESS, amountWei)).wait();
+      await (await usdt.approve(TOKEN_SALE_CONTRACT_ADDRESS, wei)).wait();
 
       const contract = new ethers.Contract(TOKEN_SALE_CONTRACT_ADDRESS, TokenSaleABI, signer);
-      toast.info('Sending transaction...');
-      const tx = await contract.buyTokens(amountWei);
+      const tx = await contract.buyTokens(wei);
 
       const tokens = calculateTokens();
-      const newTx: Transaction = {
+      setTransactions(prev => [{
         hash: tx.hash,
         buyer: account,
         amount: tokens,
         paymentMethod: 'USDT',
         timestamp: Date.now(),
         status: 'pending'
-      };
-      setTransactions(prev => [newTx, ...prev]);
+      }, ...prev]);
 
       const receipt = await tx.wait();
-
-      setTransactions(prev =>
-        prev.map(t => t.hash === tx.hash ? { ...t, status: receipt.status === 1 ? 'success' : 'failed' } : t)
-      );
+      setTransactions(prev => prev.map(t => 
+        t.hash === tx.hash ? { ...t, status: receipt.status === 1 ? 'success' : 'failed' } : t
+      ));
 
       if (receipt.status === 1) {
-        toast.success('Purchase successful!');
+        toast.success('Success!');
         setUsdtAmount('');
         await fetchBalances(account, provider);
         await fetchSaleInfo(provider);
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Transaction failed');
-      setTransactions(prev => {
-        if (prev.length > 0 && prev[0].status === 'pending') {
-          return [{ ...prev[0], status: 'failed' }, ...prev.slice(1)];
-        }
-        return prev;
-      });
+    } catch (e: any) {
+      toast.error(e.message || 'Failed');
+      setTransactions(prev => prev.length > 0 ? [{ ...prev[0], status: 'failed' }, ...prev.slice(1)] : prev);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const remaining = saleInfo
-    ? (parseFloat(saleInfo.maxTokens) - parseFloat(saleInfo.totalSold)).toFixed(0)
-    : '0';
+  const remaining = saleInfo 
+    ? (Number(saleInfo.maxTokens) - Number(saleInfo.totalSold)).toFixed(0)
+    : 'Loading...';
 
-  const formatNumber = (n: string) => parseFloat(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const formatNumber = (n: string | number) => {
+    const num = typeof n === 'string' ? parseFloat(n) : n;
+    return isNaN(num) ? '0' : num.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  };
+
   const formatAddress = (a: string) => a ? `${a.slice(0,6)}...${a.slice(-4)}` : '';
 
-  // Автоподключение при загрузке
   useEffect(() => {
     if (window.ethereum) {
-      window.ethereum.request({ method: 'eth_accounts' }).then((accounts: string[]) => {
-        if (accounts.length > 0) {
-          setAccount(accounts[0]);
-          const provider = new ethers.BrowserProvider(window.ethereum);
-          fetchBalances(accounts[0], provider);
-          fetchSaleInfo(provider);
+      window.ethereum.request({ method: 'eth_accounts' }).then((accs: string[]) => {
+        if (accs.length > 0) {
+          setAccount(accs[0]);
+          const p = new ethers.BrowserProvider(window.ethereum);
+          fetchBalances(accs[0], p);
+          fetchSaleInfo(p);
         }
       });
     }
@@ -276,14 +253,11 @@ export default function TokenSale() {
 
   return (
     <div className="min-h-screen bg-[#E8E4F3]">
-      {/* Header */}
       <header className="border-b bg-white/60 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-4">
             <img src="/expoin-logo.svg" alt="Expoin" className="h-8" />
-            <div className="hidden md:block text-sm text-gray-600 italic">
-              All Your Crypto. One Reliable Tool.
-            </div>
+            <div className="hidden md:block text-sm text-gray-600 italic">All Your Crypto. One Reliable Tool.</div>
           </div>
 
           {account ? (
@@ -292,7 +266,7 @@ export default function TokenSale() {
                 <div className="font-medium">{formatAddress(account)}</div>
                 <div className="text-gray-500">{parseFloat(usdtBalance).toFixed(2)} USDT</div>
               </div>
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-400 to-purple-600 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-400 to-purple-600 flex-center">
                 <Wallet className="w-5 h-5 text-white" />
               </div>
               <Button onClick={disconnectWallet} variant="outline" size="sm" className="rounded-full">
@@ -312,13 +286,12 @@ export default function TokenSale() {
       </header>
 
       <main className="container mx-auto px-4 py-12">
-        {/* Hero */}
         <div className="text-center mb-12">
           <h1 className="text-5xl md:text-6xl font-bold mb-4">EXN Token Sale</h1>
           <p className="text-xl text-gray-600">Join the future of cross-chain trading</p>
         </div>
 
-        {/* Две карточки статистики — без прогресс-бара */}
+        {/* Две карточки */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto mb-12">
           <div className="p-6 rounded-3xl shadow-lg text-white" style={{ background: 'linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)' }}>
             <div className="flex items-center gap-2 mb-3">
@@ -341,14 +314,12 @@ export default function TokenSale() {
           </div>
         </div>
 
-        {/* Основная сетка */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
-          {/* Форма покупки */}
           <div className="lg:col-span-2">
             <Card className="rounded-3xl border-0 shadow-xl">
               <CardHeader>
                 <CardTitle className="text-2xl">Purchase Tokens</CardTitle>
-                <CardDescription>Buy EXN with USDT (BSC)</CardDescription>
+                <CardDescription>Buy with USDT (BSC)</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div>
@@ -379,15 +350,13 @@ export default function TokenSale() {
                       MAX
                     </Button>
                   </div>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Balance: {parseFloat(usdtBalance).toFixed(2)} USDT
-                  </p>
+                  <p className="text-sm text-gray-600 mt-1">Balance: {parseFloat(usdtBalance).toFixed(2)} USDT</p>
                 </div>
 
                 {usdtAmount && parseFloat(usdtAmount) > 0 && (
                   <div className="p-5 bg-gray-100 rounded-2xl">
-                    <div className="flex justify-between"><span className="text-gray-600">You pay:</span><strong>{usdtAmount} USDT</strong></div>
-                    <div className="flex justify-between"><span className="text-gray-600">You receive:</span><strong>{formatNumber(calculateTokens())} EXN</strong></div>
+                    <div className="flex justify-between"><span className="text-gray-600">Pay:</span> <strong>{usdtAmount} USDT</strong></div>
+                    <div className="flex justify-between"><span className="text-gray-600">Receive:</span> <strong>{formatNumber(calculateTokens())} EXN</strong></div>
                   </div>
                 )}
 
@@ -402,7 +371,6 @@ export default function TokenSale() {
             </Card>
           </div>
 
-          {/* История транзакций */}
           <div>
             <Card className="rounded-3xl border-0 shadow-xl">
               <CardHeader>
@@ -436,23 +404,55 @@ export default function TokenSale() {
         </div>
       </main>
 
-      {/* Модалка подключения кошелька */}
+      {/* ВЕРНУТА СТАРАЯ МОДАЛКА С ВЫБОРОМ КОШЕЛЬКОВ */}
       <Dialog open={showWalletModal} onOpenChange={setShowWalletModal}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Connect Wallet</DialogTitle>
+            <DialogTitle className="text-2xl font-bold">Connect Wallet</DialogTitle>
+            <DialogDescription>Choose your wallet</DialogDescription>
           </DialogHeader>
-          <Button onClick={connectWallet} className="h-16 w-full">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-lg bg-orange-100 flex items-center justify-center">
-                <Wallet className="w-7 h-7 text-orange-600" />
+          <div className="grid gap-4 py-4">
+            <Button onClick={connectWallet} variant="outline" className="h-16 justify-start">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-orange-100 flex-center">
+                  <Wallet className="w-6 h-6 text-orange-600" />
+                </div>
+                <div>MetaMask</div>
               </div>
-              <div className="text-left">
-                <div className="font-bold">MetaMask / Trust Wallet / OKX</div>
-                <div className="text-sm text-gray-500">Click to connect</div>
+            </Button>
+            <Button onClick={connectWallet} variant="outline" className="h-16 justify-start">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-blue-100 flex-center">
+                  <Wallet className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>Trust Wallet</div>
               </div>
-            </div>
-          </Button>
+            </Button>
+            <Button onClick={connectWallet} variant="outline" className="h-16 justify-start">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-black flex-center">
+                  <Wallet className="w-6 h-6 text-white" />
+                </div>
+                <div>OKX Wallet</div>
+              </div>
+            </Button>
+            <Button onClick={connectWallet} variant="outline" className="h-16 justify-start">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-purple-100 flex-center">
+                  <Wallet className="w-6 h-6 text-purple-600" />
+                </div>
+                <div>SafePal</div>
+              </div>
+            </Button>
+            <Button onClick={connectWallet} variant="outline" className="h-16 justify-start">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-yellow-100 flex-center">
+                  <Wallet className="w-6 h-6 text-yellow-600" />
+                </div>
+                <div>Binance Web3</div>
+              </div>
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
