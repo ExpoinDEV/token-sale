@@ -7,7 +7,8 @@ import { Label } from '@/components/ui/label';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Loader2, Wallet, TrendingUp, Clock, CheckCircle2, XCircle, LogOut, ChevronDown } from 'lucide-react';
+import { Loader2, Wallet, TrendingUp, Clock, CheckCircle2, XCircle, LogOut } from 'lucide-react';
+
 import TokenSaleABI from '../abi/TokenSaleContract.json';
 import { TOKEN_SALE_CONTRACT_ADDRESS, USDT_ADDRESS, TOKEN_PRICE_USD } from '../web-utils/constants';
 
@@ -35,15 +36,14 @@ export default function TokenSale() {
   const [saleInfo, setSaleInfo] = useState<SaleInfo | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [usdtBalance, setUsdtBalance] = useState('0');
-  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [showWalletModal, setShowWalletModal] = useState(false);
 
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-  // Ключ для хранения транзакций конкретного кошелька
+  // Уникальный ключ в localStorage для каждого адреса
   const getStorageKey = () => `exn-transactions-${account?.toLowerCase() || 'temp'}`;
 
-  // Загрузка транзакций при смене аккаунта
+  // Загрузка транзакций при подключении/смене кошелька
   useEffect(() => {
     if (account) {
       try {
@@ -51,8 +51,6 @@ export default function TokenSale() {
         if (saved) {
           const parsed = JSON.parse(saved);
           setTransactions(Array.isArray(parsed) ? parsed : []);
-        } else {
-          setTransactions([]);
         }
       } catch (e) {
         setTransactions([]);
@@ -60,7 +58,6 @@ export default function TokenSale() {
     } else {
       setTransactions([]);
     }
-  }, [account]);
   }, [account]);
 
   // Сохранение транзакций
@@ -70,20 +67,20 @@ export default function TokenSale() {
     }
   }, [transactions, account]);
 
-  // Подключение кошелька (работает везде: Trust Wallet, MetaMask, OKX и т.д.)
+  // Подключение кошелька — работает на всех устройствах
   const connectWallet = async () => {
     setShowWalletModal(false);
 
     if ((window as any).phantom?.ethereum) {
-      toast.error('Phantom not supported');
+      toast.error('Phantom wallet not supported');
       return;
     }
 
     if (!window.ethereum) {
       if (isMobile) {
-        window.location.href = `https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}`;
+        window.location.href = `https://metamask.app.link/dapp/${window.location.hostname}${window.location.pathname}`;
       } else {
-        toast.error('Install MetaMask or Trust Wallet');
+        toast.error('Please install MetaMask or Trust Wallet');
       }
       return;
     }
@@ -91,6 +88,7 @@ export default function TokenSale() {
     try {
       setIsConnecting(true);
 
+      // Переключение на BSC
       const chainId = await window.ethereum.request({ method: 'eth_chainId' });
       if (chainId !== '0x38') {
         try {
@@ -104,12 +102,14 @@ export default function TokenSale() {
               method: 'wallet_addEthereumChain',
               params: [{
                 chainId: '0x38',
-                chainName: 'Binance Smart Chain',
+                chainName: 'Binance Smart Chain Mainnet',
                 nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
                 rpcUrls: ['https://bsc-dataseed.binance.org/'],
                 blockExplorerUrls: ['https://bscscan.com']
               }]
             });
+          } else {
+            throw e;
           }
         }
       }
@@ -117,13 +117,13 @@ export default function TokenSale() {
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
       const addr = accounts[0];
       setAccount(addr);
-      toast.success('Connected!');
+      toast.success('Wallet connected!');
 
       const provider = new ethers.BrowserProvider(window.ethereum);
       await fetchBalances(addr, provider);
       await fetchSaleInfo(provider);
-    } catch (e: any) {
-      toast.error(e.message || 'Connection failed');
+    } catch (error: any) {
+      toast.error(error.message || 'Connection failed');
     } finally {
       setIsConnecting(false);
     }
@@ -136,16 +136,20 @@ export default function TokenSale() {
     setSaleInfo(null);
     setTransactions([]);
     localStorage.removeItem(getStorageKey());
-    toast.success('Disconnected');
+    toast.success('Wallet disconnected');
   };
 
   const fetchBalances = async (address: string, provider: ethers.BrowserProvider) => {
     try {
-      const usdt = new ethers.Contract(USDT_ADDRESS, ['function balanceOf(address) view returns (uint256)'], provider);
+      const usdt = new ethers.Contract(
+        USDT_ADDRESS,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider
+      );
       const bal = await usdt.balanceOf(address);
       setUsdtBalance(ethers.formatUnits(bal, 18));
     } catch (e) {
-      console.error(e);
+      console.error('Balance fetch error:', e);
     }
   };
 
@@ -162,7 +166,7 @@ export default function TokenSale() {
         tokenPrice: ethers.formatUnits(info.price, 18),
       });
     } catch (e) {
-      console.error(e);
+      console.error('Sale info fetch error:', e);
     }
   };
 
@@ -177,16 +181,16 @@ export default function TokenSale() {
   const handleMax = () => {
     const bal = parseFloat(usdtBalance) || 0;
     const max = Math.min(10000, bal);
-    setUsdtAmount(max >= 1 ? max.toString() : '');
+    if (max >= 1) setUsdtAmount(max.toString());
   };
 
   const handlePurchase = async () => {
-    if (!account) return toast.error('Connect wallet');
-    if (!usdtAmount) return toast.error('Enter amount');
+    if (!account) return toast.error('Connect wallet first');
+    if (!usdtAmount) return toast.error('Enter USDT amount');
 
     const amount = parseFloat(usdtAmount);
-    if (amount < 1) return toast.error('Min: 1 USDT');
-    if (amount > 10000) return toast.error('Max: 10,000 USDT');
+    if (amount < 1) return toast.error('Minimum 1 USDT');
+    if (amount > 10000) return toast.error('Maximum 10,000 USDT');
 
     try {
       setIsLoading(true);
@@ -195,18 +199,22 @@ export default function TokenSale() {
 
       const usdtContract = new ethers.Contract(
         USDT_ADDRESS,
-        ['function approve(address,uint256) returns (bool)', 'function balanceOf(address) returns (uint256)'],
+        [
+          'function approve(address spender, uint256 amount) returns (bool)',
+          'function balanceOf(address) view returns (uint256)'
+        ],
         signer
       );
 
       const amountWei = ethers.parseUnits(usdtAmount, 18);
-      if ((await usdtContract.balanceOf(account)) < amountWei) {
-        return toast.error('Not enough USDT');
-      }
+      const balance = await usdtContract.balanceOf(account);
+      if (balance < amountWei) return toast.error('Insufficient USDT');
 
+      toast.info('Approving USDT...');
       await (await usdtContract.approve(TOKEN_SALE_CONTRACT_ADDRESS, amountWei)).wait();
 
       const contract = new ethers.Contract(TOKEN_SALE_CONTRACT_ADDRESS, TokenSaleABI, signer);
+      toast.info('Sending transaction...');
       const tx = await contract.buyTokens(amountWei);
 
       const tokens = calculateTokens();
@@ -218,22 +226,28 @@ export default function TokenSale() {
         timestamp: Date.now(),
         status: 'pending'
       };
-
-      setTransactions(p => [newTx, ...p]);
-      toast.info('Transaction sent...');
+      setTransactions(prev => [newTx, ...prev]);
 
       const receipt = await tx.wait();
-      setTransactions(p => p.map(t => t.hash === tx.hash ? { ...t, status: receipt.status === 1 ? 'success' : 'failed' } : t));
+
+      setTransactions(prev =>
+        prev.map(t => t.hash === tx.hash ? { ...t, status: receipt.status === 1 ? 'success' : 'failed' } : t)
+      );
 
       if (receipt.status === 1) {
-        toast.success('Success!');
+        toast.success('Purchase successful!');
         setUsdtAmount('');
         await fetchBalances(account, provider);
         await fetchSaleInfo(provider);
       }
-    } catch (e: any) {
-      toast.error(e.message || 'Failed');
-      setTransactions(p => p.length > 0 && p[0].status === 'pending' ? [{ ...p[0], status: 'failed' }, ...p.slice(1)] : p);
+    } catch (error: any) {
+      toast.error(error.message || 'Transaction failed');
+      setTransactions(prev => {
+        if (prev.length > 0 && prev[0].status === 'pending') {
+          return [{ ...prev[0], status: 'failed' }, ...prev.slice(1)];
+        }
+        return prev;
+      });
     } finally {
       setIsLoading(false);
     }
@@ -246,15 +260,15 @@ export default function TokenSale() {
   const formatNumber = (n: string) => parseFloat(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
   const formatAddress = (a: string) => a ? `${a.slice(0,6)}...${a.slice(-4)}` : '';
 
-  // Автоподключение
+  // Автоподключение при загрузке
   useEffect(() => {
     if (window.ethereum) {
-      window.ethereum.request({ method: 'eth_accounts' }).then((accs: string[]) => {
-        if (accs.length > 0) {
-          setAccount(accs[0]);
-          const p = new ethers.BrowserProvider(window.ethereum);
-          fetchBalances(accs[0], p);
-          fetchSaleInfo(p);
+      window.ethereum.request({ method: 'eth_accounts' }).then((accounts: string[]) => {
+        if (accounts.length > 0) {
+          setAccount(accounts[0]);
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          fetchBalances(accounts[0], provider);
+          fetchSaleInfo(provider);
         }
       });
     }
@@ -267,7 +281,9 @@ export default function TokenSale() {
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-4">
             <img src="/expoin-logo.svg" alt="Expoin" className="h-8" />
-            <div className="hidden md:block text-sm text-gray-600 italic">All Your Crypto. One Reliable Tool.</div>
+            <div className="hidden md:block text-sm text-gray-600 italic">
+              All Your Crypto. One Reliable Tool.
+            </div>
           </div>
 
           {account ? (
@@ -284,7 +300,11 @@ export default function TokenSale() {
               </Button>
             </div>
           ) : (
-            <Button onClick={() => setShowWalletModal(true)} disabled={isConnecting} className="bg-black text-white rounded-full px-8">
+            <Button
+              onClick={() => setShowWalletModal(true)}
+              disabled={isConnecting}
+              className="bg-black text-white rounded-full px-8"
+            >
               {isConnecting ? 'Connecting...' : 'Connect Wallet'}
             </Button>
           )}
@@ -292,12 +312,13 @@ export default function TokenSale() {
       </header>
 
       <main className="container mx-auto px-4 py-12">
+        {/* Hero */}
         <div className="text-center mb-12">
           <h1 className="text-5xl md:text-6xl font-bold mb-4">EXN Token Sale</h1>
           <p className="text-xl text-gray-600">Join the future of cross-chain trading</p>
         </div>
 
-        {/* Только две карточки — без прогресс-бара */}
+        {/* Две карточки статистики — без прогресс-бара */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto mb-12">
           <div className="p-6 rounded-3xl shadow-lg text-white" style={{ background: 'linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)' }}>
             <div className="flex items-center gap-2 mb-3">
@@ -322,7 +343,7 @@ export default function TokenSale() {
 
         {/* Основная сетка */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
-          {/* Покупка */}
+          {/* Форма покупки */}
           <div className="lg:col-span-2">
             <Card className="rounded-3xl border-0 shadow-xl">
               <CardHeader>
@@ -396,7 +417,7 @@ export default function TokenSale() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {transactions.slice(0, 6).map(tx) => (
+                    {transactions.slice(0, 6).map((tx) => (
                       <div key={tx.hash} className="flex justify-between items-center p-3 border rounded-2xl">
                         <div>
                           <p className="font-medium">{formatNumber(tx.amount)} EXN</p>
@@ -413,24 +434,21 @@ export default function TokenSale() {
             </Card>
           </div>
         </div>
-
-        {/* FAQ и футер — без изменений */}
-        {/* ... */}
       </main>
 
-      {/* Модалка кошелька */}
+      {/* Модалка подключения кошелька */}
       <Dialog open={showWalletModal} onOpenChange={setShowWalletModal}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Connect Wallet</DialogTitle>
           </DialogHeader>
-          <Button onClick={connectWallet} className="h-16">
-            <div className="flex items-center gap-4 w-full justify-start">
-              <div className="w-12 h-12 rounded-lg bg-orange-100 flex-center">
+          <Button onClick={connectWallet} className="h-16 w-full">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-lg bg-orange-100 flex items-center justify-center">
                 <Wallet className="w-7 h-7 text-orange-600" />
               </div>
               <div className="text-left">
-                <div className="font-bold">MetaMask / Trust Wallet</div>
+                <div className="font-bold">MetaMask / Trust Wallet / OKX</div>
                 <div className="text-sm text-gray-500">Click to connect</div>
               </div>
             </div>
