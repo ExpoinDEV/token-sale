@@ -50,8 +50,19 @@ export default function TokenSale() {
   // Load transactions when account changes
   useEffect(() => {
     if (account) {
-      const saved = localStorage.getItem(getStorageKey());
-      setTransactions(saved ? JSON.parse(saved) : []);
+      const storageKey = `exn-transactions-${account.toLowerCase()}`;
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setTransactions(Array.isArray(parsed) ? parsed : []);
+        } catch (error) {
+          console.error('Error parsing transactions:', error);
+          setTransactions([]);
+        }
+      } else {
+        setTransactions([]);
+      }
     } else {
       setTransactions([]);
     }
@@ -59,8 +70,11 @@ export default function TokenSale() {
 
   // Save transactions to localStorage whenever they change
   useEffect(() => {
-    if (account && transactions.length > 0) {
-      localStorage.setItem(getStorageKey(), JSON.stringify(transactions));
+    if (account) {
+      const storageKey = `exn-transactions-${account.toLowerCase()}`;
+      if (transactions.length > 0) {
+        localStorage.setItem(storageKey, JSON.stringify(transactions));
+      }
     }
   }, [transactions, account]);
 
@@ -113,7 +127,7 @@ export default function TokenSale() {
     
           setUsdtBalance('0');
           setSaleInfo(null);
-          setTransactions([]);
+          // Don't clear transactions - they will be loaded from localStorage on reconnect
         }
       };
       
@@ -216,7 +230,7 @@ export default function TokenSale() {
 
       setUsdtBalance('0');
       setSaleInfo(null);
-      setTransactions([]);
+      // Don't clear transactions - they will be loaded from localStorage on reconnect
       
       // Request MetaMask to disconnect (revoke permissions)
       // This allows user to select different account on next connect
@@ -292,7 +306,7 @@ export default function TokenSale() {
     
     // Use token price from constants or contract
     const price = saleInfo ? parseFloat(saleInfo.tokenPrice) : TOKEN_PRICE_USD;
-    return (usdt / price).toFixed(2);
+    return Math.floor(usdt / price).toString();
   };
 
   // Handle MAX button
@@ -429,7 +443,9 @@ export default function TokenSale() {
 
   // Format number with commas
   const formatNumber = (num: string) => {
-    return parseFloat(num).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    const parsed = parseFloat(num);
+    if (isNaN(parsed)) return '0';
+    return parsed.toLocaleString('en-US', { maximumFractionDigits: 2 });
   };
 
   // Format address
