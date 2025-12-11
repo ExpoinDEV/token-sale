@@ -115,19 +115,27 @@ export default function TokenSale() {
     if (window.ethereum) {
       // Account change listener
       const handleAccountsChanged = async (accounts: string[]) => {
-        if (accounts.length > 0) {
-          setAccount(accounts[0]);
-          const provider = new ethers.BrowserProvider(window.ethereum!);
-          await fetchBalances(accounts[0], provider);
-          await fetchSaleInfo(provider);
-          // Transactions will load in useEffect above
-        } else {
-          // User disconnected wallet
-          setAccount('');
-    
-          setUsdtBalance('0');
-          setSaleInfo(null);
-          // Don't clear transactions - they will be loaded from localStorage on reconnect
+        try {
+          if (accounts.length > 0) {
+            setAccount(accounts[0]);
+            const provider = new ethers.BrowserProvider(window.ethereum!);
+            try {
+              await fetchBalances(accounts[0], provider);
+              await fetchSaleInfo(provider);
+            } catch (error) {
+              console.error('Error fetching data on account change:', error);
+            }
+            // Transactions will load in useEffect above
+          } else {
+            // User disconnected wallet
+            setAccount('');
+      
+            setUsdtBalance('0');
+            // Keep saleInfo to show data even without wallet
+            // Don't clear transactions - they will be loaded from localStorage on reconnect
+          }
+        } catch (error) {
+          console.error('Error handling account change:', error);
         }
       };
       
@@ -169,10 +177,19 @@ export default function TokenSale() {
     try {
       setIsConnecting(true);
       
-      // Check and switch to BSC network
+      // Request accounts first - this will open wallet popup
+      const accounts = await window.ethereum.request({
+        method: 'eth_requestAccounts',
+      });
+      
+      if (!accounts || accounts.length === 0) {
+        throw new Error('No accounts found');
+      }
+      
+      // Check and switch to BSC network after account is selected
       const chainId = await window.ethereum.request({ method: 'eth_chainId' });
       if (chainId !== '0x38') { // BSC Mainnet: 0x38 (56 decimal)
-        toast.error('Switching to Binance Smart Chain...');
+        toast.info('Switching to Binance Smart Chain...');
         
         try {
           await window.ethereum.request({
@@ -192,6 +209,11 @@ export default function TokenSale() {
                 blockExplorerUrls: ['https://bscscan.com/']
               }]
             });
+          } else if (switchError.code === 4001) {
+            // User rejected network switch
+            toast.error('Please switch to BSC network to continue');
+            setIsConnecting(false);
+            return;
           } else {
             throw switchError;
           }
@@ -200,22 +222,30 @@ export default function TokenSale() {
       
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // Request accounts - this will open wallet popup to select account
-      const accounts = await window.ethereum.request({
-        method: 'eth_requestAccounts',
-      });
-      
       setAccount(accounts[0]);
       toast.success('Wallet connected!');
       
-      // Fetch balances
-      await fetchBalances(accounts[0], provider);
-      
-      // Fetch sale info
-      await fetchSaleInfo(provider);
+      // Fetch balances and sale info
+      try {
+        await Promise.all([
+          fetchBalances(accounts[0], provider),
+          fetchSaleInfo(provider)
+        ]);
+      } catch (fetchError) {
+        console.error('Error fetching data:', fetchError);
+        // Don't fail the connection if data fetch fails
+      }
     } catch (error: any) {
       console.error('Error connecting wallet:', error);
-      toast.error(error.message || 'Failed to connect wallet');
+      
+      // Handle specific error codes
+      if (error.code === 4001) {
+        toast.error('Connection rejected by user');
+      } else if (error.code === -32002) {
+        toast.error('Connection request already pending. Please check your wallet.');
+      } else {
+        toast.error(error.message || 'Failed to connect wallet');
+      }
     } finally {
       setIsConnecting(false);
     }
@@ -453,18 +483,46 @@ export default function TokenSale() {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
-  // Auto-connect on load
+  // Auto-connect on load and fetch sale info
   useEffect(() => {
-    if (window.ethereum) {
-      window.ethereum.request({ method: 'eth_accounts' }).then((accounts: string[]) => {
-        if (accounts.length > 0) {
-          setAccount(accounts[0]);
-          const provider = new ethers.BrowserProvider(window.ethereum!);
-          fetchBalances(accounts[0], provider);
-          fetchSaleInfo(provider);
+    const initializeApp = async () => {
+      if (window.ethereum) {
+        try {
+          // Try to get connected accounts
+          const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+          
+          if (accounts.length > 0) {
+            setAccount(accounts[0]);
+            const provider = new ethers.BrowserProvider(window.ethereum!);
+            await fetchBalances(accounts[0], provider);
+            await fetchSaleInfo(provider);
+          } else {
+            // Even without connected wallet, fetch sale info for display
+            const provider = new ethers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+            await fetchSaleInfo(provider as any);
+          }
+        } catch (error) {
+          console.error('Error initializing app:', error);
+          // Fallback: try to fetch sale info with public RPC
+          try {
+            const provider = new ethers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+            await fetchSaleInfo(provider as any);
+          } catch (fallbackError) {
+            console.error('Error fetching sale info with fallback:', fallbackError);
+          }
         }
-      });
-    }
+      } else {
+        // No wallet installed, still fetch sale info
+        try {
+          const provider = new ethers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+          await fetchSaleInfo(provider as any);
+        } catch (error) {
+          console.error('Error fetching sale info without wallet:', error);
+        }
+      }
+    };
+    
+    initializeApp();
   }, []);
 
   const faqItems = [
@@ -610,23 +668,7 @@ export default function TokenSale() {
           </div>
         </div>
 
-        {/* Progress Bar */}
-        {saleInfo && (
-          <Card className="mb-12 max-w-4xl mx-auto rounded-3xl border-0 shadow-lg">
-            <CardHeader>
-              <CardTitle className="text-2xl">Sale Progress</CardTitle>
-              <CardDescription className="text-base">
-                {formatNumber(saleInfo.totalSold)} / {formatNumber(saleInfo.maxTokens)} tokens sold
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Progress value={getProgress()} className="h-4 rounded-full" />
-              <p className="text-sm text-gray-600 mt-3 text-center font-medium">
-                {getProgress().toFixed(2)}% Complete
-              </p>
-            </CardContent>
-          </Card>
-        )}
+
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
