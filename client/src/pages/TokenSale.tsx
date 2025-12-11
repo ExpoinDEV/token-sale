@@ -185,13 +185,8 @@ export default function TokenSale() {
         throw new Error('No accounts found');
       }
       
-      // Check network
-      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-      if (chainId !== '0x38') { // BSC Mainnet: 0x38 (56 decimal)
-        toast.error('Please switch your wallet to Binance Smart Chain (BSC) network to continue.');
-        setIsConnecting(false);
-        return;
-      }
+      // Network check is handled by the chainChanged listener and transaction logic.
+      // We proceed with connection, assuming the user will switch if needed.
       
       const provider = new ethers.BrowserProvider(window.ethereum);
       
