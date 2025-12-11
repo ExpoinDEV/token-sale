@@ -33,11 +33,15 @@ interface Transaction {
 export default function TokenSale() {
   const [account, setAccount] = useState<string>('');
   const [isConnecting, setIsConnecting] = useState(false);
-  const [tokenAmount, setTokenAmount] = useState('');
+  const [usdtAmount, setUsdtAmount] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
   const [saleInfo, setSaleInfo] = useState<SaleInfo | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    // Load from localStorage on mount
+    const saved = localStorage.getItem('exn-transactions');
+    return saved ? JSON.parse(saved) : [];
+  });
 
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
@@ -68,6 +72,11 @@ export default function TokenSale() {
       }
     }
   };
+
+  // Save transactions to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('exn-transactions', JSON.stringify(transactions));
+  }, [transactions]);
 
   // Fetch BNB price on mount and every 30 seconds
   useEffect(() => {
@@ -190,7 +199,7 @@ export default function TokenSale() {
     try {
       // Clear local state
       setAccount('');
-      setTokenAmount('');
+      setUsdtAmount('');
 
       setUsdtBalance('0');
       setSaleInfo(null);
@@ -245,37 +254,40 @@ export default function TokenSale() {
         provider
       );
 
-      const [totalSold, maxTokens, minPurchase, tokenPrice, bnbPrice] = await Promise.all([
-        contract.totalSold(),
-        contract.maxTokens(),
-        contract.minPurchase(),
-        contract.tokenPrice(),
-        contract.bnbPrice(),
-      ]);
+      // Get current round info from TokenSaleV3
+      const currentRoundId = await contract.currentRoundId();
+      const roundInfo = await contract.saleRounds(currentRoundId);
 
       setSaleInfo({
-        totalSold: ethers.formatUnits(totalSold, 18),
-        maxTokens: ethers.formatUnits(maxTokens, 18),
-        minPurchase: ethers.formatUnits(minPurchase, 18),
-        tokenPrice: ethers.formatUnits(tokenPrice, 6),
-        bnbPrice: ethers.formatUnits(bnbPrice, 6),
+        totalSold: ethers.formatUnits(roundInfo.sold, 18),
+        maxTokens: ethers.formatUnits(roundInfo.allocation, 18),
+        minPurchase: ethers.formatUnits(roundInfo.minPurchase, 18),
+        tokenPrice: ethers.formatUnits(roundInfo.price, 18), // price is in wei
+        bnbPrice: '0', // Not used in TokenSaleV3
       });
     } catch (error) {
       console.error('Error fetching sale info:', error);
     }
   };
 
-  // Calculate cost based on token amount
-  const calculateCost = () => {
-    if (!tokenAmount) return '0';
+  // Calculate tokens based on USDT amount
+  const calculateTokens = () => {
+    if (!usdtAmount) return '0';
     
-    const tokens = parseFloat(tokenAmount);
-    if (isNaN(tokens) || tokens <= 0) return '0';
+    const usdt = parseFloat(usdtAmount);
+    if (isNaN(usdt) || usdt <= 0) return '0';
     
     // Use token price from constants or contract
     const price = saleInfo ? parseFloat(saleInfo.tokenPrice) : TOKEN_PRICE_USD;
-    // USDT only
-    return (tokens * price).toFixed(2);
+    return (usdt / price).toFixed(2);
+  };
+
+  // Handle MAX button
+  const handleMax = () => {
+    const balance = parseFloat(usdtBalance);
+    const maxAmount = Math.min(10000, balance);
+    const finalAmount = Math.max(1, maxAmount);
+    setUsdtAmount(finalAmount.toString());
   };
 
   // Handle purchase
@@ -285,22 +297,22 @@ export default function TokenSale() {
       return;
     }
     
-    if (!tokenAmount) {
-      toast.error('Please enter token amount');
+    if (!usdtAmount) {
+      toast.error('Please enter USDT amount');
       return;
     }
 
-    const tokens = parseFloat(tokenAmount);
-    const minPurchase = saleInfo ? parseFloat(saleInfo.minPurchase) : MIN_PURCHASE_TOKENS;
-    const maxPurchase = MAX_PURCHASE_TOKENS;
+    const usdt = parseFloat(usdtAmount);
+    const minUsdt = 1;
+    const maxUsdt = 10000;
 
-    if (tokens < minPurchase) {
-      toast.error(`Minimum purchase is ${minPurchase} tokens ($${(minPurchase * TOKEN_PRICE_USD).toFixed(2)})`);
+    if (usdt < minUsdt) {
+      toast.error(`Minimum purchase is ${minUsdt} USDT`);
       return;
     }
 
-    if (tokens > maxPurchase) {
-      toast.error(`Maximum purchase is ${maxPurchase.toLocaleString()} tokens ($${(maxPurchase * TOKEN_PRICE_USD).toLocaleString()})`);
+    if (usdt > maxUsdt) {
+      toast.error(`Maximum purchase is ${maxUsdt.toLocaleString()} USDT`);
       return;
     }
 
@@ -321,13 +333,12 @@ export default function TokenSale() {
         signer
       );
       
-      const costInUsdt = calculateCost();
-      const usdtAmountWei = ethers.parseUnits(costInUsdt, 18);
+      const usdtAmountWei = ethers.parseUnits(usdtAmount, 18);
       
       // Check USDT balance
       const usdtBalance = await usdtContract.balanceOf(account);
       if (usdtBalance < usdtAmountWei) {
-        toast.error(`Insufficient USDT balance. You need ${costInUsdt} USDT (Tether USD on BSC).`);
+        toast.error(`Insufficient USDT balance. You need ${usdtAmount} USDT (Tether USD on BSC).`);
         return;
       }
       
@@ -339,11 +350,14 @@ export default function TokenSale() {
       // Use buyTokens(usdtAmount) from TokenSaleV3
       const tx = await contract.buyTokens(usdtAmountWei);
 
+      // Calculate tokens for transaction history
+      const tokens = calculateTokens();
+
       // Add to transactions
       setTransactions(prev => [{
         hash: tx.hash,
         buyer: account,
-        amount: tokenAmount,
+        amount: tokens,
         paymentMethod: 'USDT',
         timestamp: Date.now(),
         status: 'pending'
@@ -363,7 +377,7 @@ export default function TokenSale() {
 
       if (receipt.status === 1) {
         toast.success('Purchase successful!');
-        setTokenAmount('');
+        setUsdtAmount('');
         
         // Refresh data
         await fetchBalances(account, provider);
@@ -431,7 +445,7 @@ export default function TokenSale() {
     },
     {
       question: "What payment methods are accepted?",
-      answer: "We accept BNB (Binance Coin) and USDT (Tether) on the BSC network. You can switch between payment methods using the tabs in the purchase form."
+      answer: "We accept USDT (Tether) on the BSC network. You can switch between payment methods using the tabs in the purchase form."
     },
     {
       question: "How do I participate in the token sale?",
@@ -591,39 +605,50 @@ export default function TokenSale() {
               <CardContent className="space-y-6">
                 <div className="space-y-6">
                     <div className="space-y-2">
-                      <Label htmlFor="token-amount-usdt" className="text-base font-medium">Token Amount</Label>
-                      <Input
-                        id="token-amount-usdt"
-                        type="number"
-                        placeholder={`Min: ${saleInfo?.minPurchase || '40'}`}
-                        value={tokenAmount}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          const numValue = parseFloat(value);
-                          if (numValue > MAX_PURCHASE_TOKENS) {
-                            toast.error(`Maximum purchase is ${MAX_PURCHASE_TOKENS.toLocaleString()} tokens`);
-                            return;
-                          }
-                          setTokenAmount(value);
-                        }}
-                        min="40"
-                        disabled={!account}
-                        className="rounded-2xl h-12 text-base"
-                      />
+                      <Label htmlFor="usdt-amount-usdt" className="text-base font-medium">USDT Amount</Label>
+                      <div className="relative">
+                        <Input
+                          id="usdt-amount-usdt"
+                          type="number"
+                          placeholder="Min: 1"
+                          value={usdtAmount}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            const numValue = parseFloat(value);
+                            if (numValue > 10000) {
+                              toast.error(`Maximum purchase is 10,000 USDT`);
+                              return;
+                            }
+                            setUsdtAmount(value);
+                          }}
+                          min="1"
+                          disabled={!account}
+                          className="rounded-2xl h-12 text-base pr-16" // Добавляем padding-right для кнопки MAX
+                        />
+                        <Button
+                          onClick={handleMax}
+                          variant="ghost"
+                          size="sm"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 font-bold text-blue-600 hover:bg-blue-50"
+                          disabled={!account || parseFloat(usdtBalance) < 1}
+                        >
+                          MAX
+                        </Button>
+                      </div>
                       <p className="text-sm text-gray-600">
                         Available: {parseFloat(usdtBalance).toFixed(2)} USDT
                       </p>
                     </div>
 
-                    {tokenAmount && (
+                    {usdtAmount && (
                       <div className="p-5 rounded-2xl space-y-3" style={{ background: '#F3F4F6' }}>
                         <div className="flex justify-between text-base">
                           <span className="text-gray-600">You pay:</span>
-                          <span className="font-bold text-gray-900">{calculateCost()} USDT</span>
+                          <span className="font-bold text-gray-900">{usdtAmount} USDT</span>
                         </div>
                         <div className="flex justify-between text-base">
                           <span className="text-gray-600">You receive:</span>
-                          <span className="font-bold text-gray-900">{formatNumber(tokenAmount)} EXN</span>
+                          <span className="font-bold text-gray-900">{formatNumber(calculateTokens())} EXN</span>
                         </div>
                       </div>
                     )}
@@ -631,7 +656,7 @@ export default function TokenSale() {
 
                 <Button
                   onClick={handlePurchase}
-                  disabled={!account || isLoading || !tokenAmount}
+                  disabled={!account || isLoading || !usdtAmount}
                   className="w-full rounded-full h-14 text-lg font-bold text-white"
                   style={{ background: '#000000' }}
                   size="lg"
@@ -648,7 +673,7 @@ export default function TokenSale() {
 
                 {saleInfo && (
                   <p className="text-sm text-center text-gray-600">
-                    Minimum purchase: {formatNumber(saleInfo.minPurchase)} EXN tokens
+                    Minimum purchase: 1 USDT
                   </p>
                 )}
               </CardContent>
@@ -752,7 +777,7 @@ export default function TokenSale() {
         {/* Footer */}
         <footer className="mt-16 text-center text-gray-600 pb-8">
           <p className="text-sm">
-            © 2024 Expoin. All rights reserved. |{' '}
+            © 2025 Expoin. All rights reserved. |{' '}
             <a href="https://expoin.io" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900 underline">
               expoin.io
             </a>
