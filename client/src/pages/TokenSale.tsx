@@ -72,9 +72,8 @@ export default function TokenSale() {
   useEffect(() => {
     if (account) {
       const storageKey = `exn-transactions-${account.toLowerCase()}`;
-      if (transactions.length > 0) {
-        localStorage.setItem(storageKey, JSON.stringify(transactions));
-      }
+      // Save transactions array, even if empty, to ensure state is correctly persisted
+      localStorage.setItem(storageKey, JSON.stringify(transactions));
     }
   }, [transactions, account]);
 
@@ -196,6 +195,8 @@ export default function TokenSale() {
             method: 'wallet_switchEthereumChain',
             params: [{ chainId: '0x38' }],
           });
+          // Wait a moment for the wallet to stabilize after network switch
+          await new Promise(resolve => setTimeout(resolve, 500));
         } catch (switchError: any) {
           // If network not added, add it
           if (switchError.code === 4902) {
@@ -209,6 +210,8 @@ export default function TokenSale() {
                 blockExplorerUrls: ['https://bscscan.com/']
               }]
             });
+            // Wait a moment for the wallet to stabilize after network add
+            await new Promise(resolve => setTimeout(resolve, 500));
           } else if (switchError.code === 4001) {
             // User rejected network switch
             toast.error('Please switch to BSC network to continue');
@@ -224,6 +227,9 @@ export default function TokenSale() {
       
       setAccount(accounts[0]);
       toast.success('Wallet connected!');
+      
+      // Wait a moment for the wallet to stabilize after connection
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Fetch balances and sale info
       try {
