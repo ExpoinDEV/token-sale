@@ -594,24 +594,6 @@ export default function TokenSale() {
           </div>
         </div>
 
-        {/* Progress Bar */}
-        {saleInfo && (
-          <Card className="mb-12 max-w-4xl mx-auto rounded-3xl border-0 shadow-lg">
-            <CardHeader>
-              <CardTitle className="text-2xl">Sale Progress</CardTitle>
-              <CardDescription className="text-base">
-                {formatNumber(saleInfo.totalSold)} / {formatNumber(saleInfo.maxTokens)} tokens sold
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Progress value={getProgress()} className="h-4 rounded-full" />
-              <p className="text-sm text-gray-600 mt-3 text-center font-medium">
-                {getProgress().toFixed(2)}% Complete
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
           {/* Purchase Card */}
