@@ -121,6 +121,11 @@ export default function Referral() {
 
   const isAdmin = !!isAdminQuery.data?.isAdmin;
 
+  // роль (пункт 4). если бекенд не отдаёт — считаем read (безопасно)
+  const adminRole = (isAdminQuery.data as any)?.role as "read" | "write" | undefined;
+  const effectiveRole: "read" | "write" = adminRole ?? "read";
+  const canWrite = isAdmin && effectiveRole === "write";
+
   // ===== Admin stats =====
   const adminStatsQuery = trpc.referral.adminStats.useQuery(
     { wallet: walletLower },
@@ -151,6 +156,65 @@ export default function Referral() {
   const data = userDataQuery.data;
   const isLoading = userDataQuery.isLoading;
 
+  // ===== ADMIN CRUD (пункт 1) =====
+  const [adminTargetWallet, setAdminTargetWallet] = useState("");
+  const [adminRoleToSet, setAdminRoleToSet] = useState<"read" | "write">("read");
+
+  // через any, чтобы TS не падал если процедур пока нет
+  const setAdminMutation = (trpc as any).referral?.setAdmin?.useMutation?.();
+  const revokeAdminMutation = (trpc as any).referral?.revokeAdmin?.useMutation?.();
+
+  const doSetAdmin = async () => {
+    const w = adminTargetWallet.trim().toLowerCase();
+    if (!w) {
+      toast.error("Enter wallet");
+      return;
+    }
+    if (!w.startsWith("0x") || w.length < 42) {
+      toast.error("Invalid wallet");
+      return;
+    }
+    if (!setAdminMutation) {
+      toast.error("Backend: referral.setAdmin is not implemented yet");
+      return;
+    }
+
+    try {
+      await setAdminMutation.mutateAsync({ wallet: w, role: adminRoleToSet });
+      toast.success(`Admin updated: ${adminRoleToSet}`);
+      setAdminTargetWallet("");
+      // обновим админ-статы чтобы сразу видеть изменения
+      await adminStatsQuery.refetch();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed");
+    }
+  };
+
+  const doRevokeAdmin = async () => {
+    const w = adminTargetWallet.trim().toLowerCase();
+    if (!w) {
+      toast.error("Enter wallet");
+      return;
+    }
+    if (!w.startsWith("0x") || w.length < 42) {
+      toast.error("Invalid wallet");
+      return;
+    }
+    if (!revokeAdminMutation) {
+      toast.error("Backend: referral.revokeAdmin is not implemented yet");
+      return;
+    }
+
+    try {
+      await revokeAdminMutation.mutateAsync({ wallet: w });
+      toast.success("Admin revoked");
+      setAdminTargetWallet("");
+      await adminStatsQuery.refetch();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed");
+    }
+  };
+
   // ===== UI =====
   return (
     <div className="min-h-screen" style={{ background: "#E8E4F3" }}>
@@ -167,12 +231,8 @@ export default function Referral() {
           {account ? (
             <div className="flex items-center gap-3">
               <div className="hidden md:block text-right">
-                <p className="text-sm font-medium">
-                  {formatAddress(account)}
-                </p>
-                <p className="text-xs text-gray-500">
-                  Referral dashboard
-                </p>
+                <p className="text-sm font-medium">{formatAddress(account)}</p>
+                <p className="text-xs text-gray-500">Referral dashboard</p>
               </div>
               <Button
                 onClick={disconnectWallet}
@@ -189,9 +249,19 @@ export default function Referral() {
               onClick={showWalletSelection}
               size="lg"
               className="rounded-full bg-black text-white"
+              disabled={isConnecting}
             >
-              <Wallet className="w-4 h-4 mr-2" />
-              Connect Wallet
+              {isConnecting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  <Wallet className="w-4 h-4 mr-2" />
+                  Connect Wallet
+                </>
+              )}
             </Button>
           )}
         </div>
@@ -232,17 +302,17 @@ export default function Referral() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <StatCard
                 title="Total USDT Volume"
-                value={data?.totals?.total_usdt ?? "0"}
+                value={isLoading ? "…" : data?.totals?.total_usdt ?? "0"}
                 icon={<TrendingUp />}
               />
               <StatCard
                 title="Total Tokens"
-                value={data?.totals?.total_tokens ?? "0"}
+                value={isLoading ? "…" : data?.totals?.total_tokens ?? "0"}
                 icon={<Clock />}
               />
               <StatCard
                 title="Referrals"
-                value={String(data?.referrals?.length ?? 0)}
+                value={isLoading ? "…" : String(data?.referrals?.length ?? 0)}
                 icon={<Users />}
               />
             </div>
@@ -254,7 +324,10 @@ export default function Referral() {
               </CardHeader>
               <CardContent className="flex justify-between items-center gap-3">
                 <p className="break-all font-semibold">{referralLink}</p>
-                <Button onClick={copyReferralLink} className="bg-black text-white">
+                <Button
+                  onClick={copyReferralLink}
+                  className="bg-black text-white"
+                >
                   <Copy className="w-4 h-4 mr-2" />
                   Copy
                 </Button>
@@ -308,24 +381,89 @@ export default function Referral() {
                 Admin referral stats
               </CardTitle>
               <CardDescription>
-                Aggregated referral performance
+                Aggregated referral performance{" "}
+                <span className="ml-2 text-xs text-gray-500">
+                  (role: {effectiveRole})
+                </span>
               </CardDescription>
             </CardHeader>
-            <CardContent>
+
+            <CardContent className="space-y-6">
+              {/* ADMIN CRUD (пункт 1) — показываем только write */}
+              {canWrite ? (
+                <div className="p-4 border rounded-2xl bg-white/70">
+                  <p className="font-medium mb-3">Admin management</p>
+
+                  <div className="flex flex-col md:flex-row gap-3">
+                    <input
+                      value={adminTargetWallet}
+                      onChange={(e) => setAdminTargetWallet(e.target.value)}
+                      placeholder="Wallet address (0x...)"
+                      className="flex-1 rounded-xl border px-3 py-2 text-sm"
+                    />
+
+                    <select
+                      value={adminRoleToSet}
+                      onChange={(e) => setAdminRoleToSet(e.target.value as any)}
+                      className="rounded-xl border px-3 py-2 text-sm"
+                    >
+                      <option value="read">read</option>
+                      <option value="write">write</option>
+                    </select>
+
+                    <Button
+                      onClick={doSetAdmin}
+                      className="bg-black text-white"
+                      disabled={setAdminMutation?.isPending}
+                    >
+                      {setAdminMutation?.isPending ? "Saving..." : "Set admin"}
+                    </Button>
+
+                    <Button
+                      onClick={doRevokeAdmin}
+                      variant="outline"
+                      disabled={revokeAdminMutation?.isPending}
+                    >
+                      {revokeAdminMutation?.isPending
+                        ? "Removing..."
+                        : "Revoke"}
+                    </Button>
+                  </div>
+
+                  <p className="text-xs text-gray-500 mt-2">
+                    read = view stats only · write = manage admins
+                  </p>
+                </div>
+              ) : (
+                <div className="p-4 border rounded-2xl bg-white/50">
+                  <p className="text-sm text-gray-600">
+                    You have <b>read</b> access. Admin management is available
+                    only for <b>write</b> admins.
+                  </p>
+                </div>
+              )}
+
+              {/* STATS (как было) */}
               {adminStatsQuery.isLoading ? (
                 <Loader2 className="animate-spin" />
               ) : (
                 <div className="space-y-3">
-                  {adminStatsQuery.data?.map((row: any) => (
-                    <div
-                      key={row.referrer_wallet}
-                      className="p-4 border rounded-2xl flex justify-between"
-                    >
-                      <span>{formatAddress(row.referrer_wallet)}</span>
-                      <span>{row.referrals_count} refs</span>
-                      <span>{row.total_usdt} USDT</span>
-                    </div>
-                  ))}
+                  {!adminStatsQuery.data?.length ? (
+                    <p className="text-sm text-gray-500">
+                      No referral data yet.
+                    </p>
+                  ) : (
+                    adminStatsQuery.data?.map((row: any) => (
+                      <div
+                        key={row.referrer_wallet}
+                        className="p-4 border rounded-2xl flex justify-between"
+                      >
+                        <span>{formatAddress(row.referrer_wallet)}</span>
+                        <span>{row.referrals_count} refs</span>
+                        <span>{row.total_usdt} USDT</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </CardContent>
