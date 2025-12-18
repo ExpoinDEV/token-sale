@@ -22,7 +22,10 @@ export function registerOAuthRoutes(app: Express) {
     }
 
     try {
+      // 1. OAuth → access token
       const tokenResponse = await sdk.exchangeCodeForToken(code, state);
+
+      // 2. Fetch user info
       const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
 
       if (!userInfo.openId) {
@@ -30,6 +33,7 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
+      // 3. Save / update user in DB
       await upsertUser({
         openId: userInfo.openId,
         name: userInfo.name || null,
@@ -38,17 +42,20 @@ export function registerOAuthRoutes(app: Express) {
         lastSignedIn: new Date(),
       });
 
+      // 4. Create LONG session (7 days)
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",
         expiresInMs: ONE_WEEK_MS,
       });
 
+      // 5. Set cookie with same TTL
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, {
         ...cookieOptions,
         maxAge: ONE_WEEK_MS,
       });
 
+      // 6. Redirect back to app
       res.redirect(302, "/");
     } catch (error) {
       console.error("[OAuth] Callback failed", error);

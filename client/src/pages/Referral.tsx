@@ -1,280 +1,172 @@
-"use client";
+import { useEffect, useMemo, useState } from "react";
+import { ethers } from "ethers";
+import { trpc } from "@/lib/trpc";
 
-import { useEffect, useMemo, useState } from 'react'
-import { ethers } from 'ethers'
-import { useRoute } from 'wouter'
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { Loader2, Wallet, LogOut, Users, TrendingUp, Clock, Copy } from "lucide-react";
 
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { toast } from 'sonner'
-import { Loader2, Wallet, LogOut } from 'lucide-react'
-
-// Prefer keeping addresses in a single place (same as TokenSale.tsx)
-// You can move this into ../web-utils/constants later.
-const REFERRAL_CONTRACT_ADDRESS =
-  (import.meta as any)?.env?.VITE_REFERRAL_CONTRACT_ADDRESS ||
-  (import.meta as any)?.env?.NEXT_PUBLIC_REFERRAL_CONTRACT_ADDRESS ||
-  '0x0000000000000000000000000000000000000000'
-
-const BSC_PUBLIC_RPC = 'https://bsc-dataseed.binance.org/'
-
-const REFERRAL_ABI = [
-  {
-    type: 'function',
-    name: 'owner',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ type: 'address' }]
-  }
-]
-
-// ------------------ Referral capture (localStorage) ------------------
-
-const REF_STORAGE_KEY = 'expoin-referrer'
-
-function safeSetReferrer(addr: string) {
-  try {
-    localStorage.setItem(REF_STORAGE_KEY, addr)
-  } catch {
-    // ignore storage errors
+declare global {
+  interface Window {
+    ethereum?: any;
   }
 }
 
-function safeGetReferrer(): string {
-  try {
-    return localStorage.getItem(REF_STORAGE_KEY) || ''
-  } catch {
-    return ''
-  }
+function formatAddress(address: string) {
+  if (!address) return "";
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-function safeClearReferrer() {
-  try {
-    localStorage.removeItem(REF_STORAGE_KEY)
-  } catch {
-    // ignore
-  }
-}
-
-/**
- * Page component to mount at: /referral
- * Also accepts: /r/:address (wouter param route)
- *
- * Expected behavior:
- * - If wallet is not connected: show CTA + render UI without data
- * - Admin is determined from referralContract.owner()
- * - Uses the same wallet UX style as TokenSale (custom modal selection)
- */
 export default function Referral() {
-  const [storedReferrer, setStoredReferrer] = useState<string>('')
+  const [account, setAccount] = useState<string>("");
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
 
-  // wouter route params for /r/:address
-  const [, params] = useRoute('/r/:address')
-  const paramAddress = (params as any)?.address as string | undefined
-
-  // Capture referral from /r/:address and redirect to token sale /
-  useEffect(() => {
-    // If opened as /r/<address> route, we get address from params
-    if (paramAddress) {
-      if (!ethers.isAddress(paramAddress)) {
-        toast.error('Invalid referral link')
-        return
-      }
-
-      safeSetReferrer(paramAddress)
-      setStoredReferrer(paramAddress)
-      toast.success('Referral code saved')
-
-      // Redirect to token sale homepage after capture
-      try {
-        window.history.replaceState(null, '', '/')
-      } catch {}
-
-      setTimeout(() => {
-        try {
-          window.location.replace('/')
-        } catch {
-          window.location.href = '/'
-        }
-      }, 50)
-
-      return
+  const storedReferrer = useMemo(() => {
+    try {
+      return localStorage.getItem("expoin-referrer") || "";
+    } catch {
+      return "";
     }
+  }, [account]); // просто чтобы ре-рендерилось после коннекта
 
-    // Otherwise we are on /referral: just load stored referrer
-    setStoredReferrer(safeGetReferrer())
-  }, [paramAddress])
+  // ===== Wallet UX (как в TokenSale) =====
 
-  const clearStoredReferrer = () => {
-    safeClearReferrer()
-    setStoredReferrer('')
-    toast.success('Referral code cleared')
-  }
-
-  const [account, setAccount] = useState<string>('')
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [showWalletModal, setShowWalletModal] = useState(false)
-
-  const [owner, setOwner] = useState<string>('')
-  const [isOwnerLoading, setIsOwnerLoading] = useState(false)
-
-  const isAdmin = useMemo(() => {
-    if (!account || !owner) return false
-    return account.toLowerCase() === owner.toLowerCase()
-  }, [account, owner])
-
-  // -------- wallet: init / listeners (copied logic style from TokenSale) --------
-
-  useEffect(() => {
-    const init = async () => {
-      // Always try to fetch owner from public RPC so role is ready ASAP
-      await fetchOwnerWithPublicRpc()
-
-      if (!window.ethereum) return
-      try {
-        const accounts = await window.ethereum.request({ method: 'eth_accounts' })
-        if (accounts?.length) {
-          setAccount(accounts[0])
-          // After connect, re-fetch owner using same provider
-          await fetchOwnerWithBrowserProvider()
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    init()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    if (!window.ethereum) return
-
-    const handleAccountsChanged = async (accounts: string[]) => {
-      if (accounts?.length) {
-        setAccount(accounts[0])
-        await fetchOwnerWithBrowserProvider()
-      } else {
-        setAccount('')
-        // keep owner cached (public RPC value)
-      }
-    }
-
-    const handleChainChanged = () => window.location.reload()
-
-    window.ethereum.on('accountsChanged', handleAccountsChanged)
-    window.ethereum.on('chainChanged', handleChainChanged)
-
-    return () => {
-      window.ethereum?.removeListener('accountsChanged', handleAccountsChanged)
-      window.ethereum?.removeListener('chainChanged', handleChainChanged)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const showWalletSelection = () => setShowWalletModal(true)
+  const showWalletSelection = () => setShowWalletModal(true);
 
   const connectWallet = async (
-    _walletType:
-      | 'metamask'
-      | 'trustwallet'
-      | 'rabby'
-      | 'okx'
-      | 'safepal'
-      | 'binance' = 'metamask'
+    _walletType: "metamask" | "trustwallet" | "rabby" | "okx" | "safepal" | "binance" = "metamask"
   ) => {
-    setShowWalletModal(false)
+    setShowWalletModal(false);
 
-    // Block Phantom wallet (same rule as TokenSale)
+    // Block Phantom wallet (как в TokenSale)
     if ((window as any).phantom?.ethereum) {
-      toast.error(
-        'Phantom wallet is not supported. Please use MetaMask, Rabby, OKX, SafePal, Binance Web3, or Trust Wallet.'
-      )
-      return
+      toast.error("Phantom wallet is not supported. Please use MetaMask, Rabby, OKX, SafePal, Binance Web3, or Trust Wallet.");
+      return;
     }
 
     if (!window.ethereum) {
-      toast.error('Please install a Web3 wallet!')
-      return
+      toast.error("Please install a Web3 wallet!");
+      return;
     }
 
     try {
-      setIsConnecting(true)
-      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
-      if (!accounts?.length) throw new Error('No accounts found')
+      setIsConnecting(true);
 
-      setAccount(accounts[0])
-      toast.success('Wallet connected!')
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (!accounts || accounts.length === 0) throw new Error("No accounts found");
 
-      await fetchOwnerWithBrowserProvider()
-    } catch (e: any) {
-      if (e?.code === 4001) toast.error('Connection rejected by user')
-      else if (e?.code === -32002) toast.error('Connection request already pending. Please check your wallet.')
-      else toast.error(e?.message || 'Failed to connect wallet')
+      setAccount(accounts[0]);
+      toast.success("Wallet connected!");
+    } catch (error: any) {
+      console.error("Error connecting wallet:", error);
+
+      if (error?.code === 4001) toast.error("Connection rejected by user");
+      else if (error?.code === -32002) toast.error("Connection request already pending. Please check your wallet.");
+      else toast.error(error?.message || "Failed to connect wallet");
     } finally {
-      setIsConnecting(false)
+      setIsConnecting(false);
     }
-  }
+  };
 
   const disconnectWallet = async () => {
     try {
-      setAccount('')
+      setAccount("");
 
       if (window.ethereum?.request) {
         try {
           await window.ethereum.request({
-            method: 'wallet_revokePermissions',
-            params: [{ eth_accounts: {} }]
-          })
+            method: "wallet_revokePermissions",
+            params: [{ eth_accounts: {} }],
+          });
         } catch {
-          // not supported in some wallets; ignore
+          // ignore
         }
       }
 
-      toast.success('Wallet disconnected')
+      toast.success("Wallet disconnected");
     } catch {
-      toast.success('Wallet disconnected')
+      toast.success("Wallet disconnected");
     }
-  }
+  };
 
-  const formatAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`
+  // автоподключение (как у вас в TokenSale)
+  useEffect(() => {
+    const init = async () => {
+      if (!window.ethereum) return;
+      try {
+        const accounts = await window.ethereum.request({ method: "eth_accounts" });
+        if (accounts?.length) setAccount(accounts[0]);
+      } catch {
+        // ignore
+      }
+    };
+    init();
+  }, []);
 
-  // -------- owner() read --------
+  useEffect(() => {
+    if (!window.ethereum) return;
 
-  const fetchOwnerWithPublicRpc = async () => {
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (accounts?.length) setAccount(accounts[0]);
+      else setAccount("");
+    };
+    const handleChainChanged = () => window.location.reload();
+
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    window.ethereum.on("chainChanged", handleChainChanged);
+
+    return () => {
+      window.ethereum?.removeListener("accountsChanged", handleAccountsChanged);
+      window.ethereum?.removeListener("chainChanged", handleChainChanged);
+    };
+  }, []);
+
+  // ===== Data =====
+
+  const walletLower = useMemo(() => (account ? account.toLowerCase() : ""), [account]);
+
+  const userDataQuery = trpc.referral.getUserData.useQuery(
+    { wallet: walletLower },
+    { enabled: !!walletLower }
+  );
+
+  const data = userDataQuery.data;
+  const isLoading = userDataQuery.isLoading;
+
+  const referralLink = useMemo(() => {
+    if (!walletLower) return "";
+    return `${window.location.origin}/r/${walletLower}`;
+  }, [walletLower]);
+
+  const copyReferralLink = async () => {
+    if (!referralLink) return;
     try {
-      setIsOwnerLoading(true)
-      const provider = new ethers.JsonRpcProvider(BSC_PUBLIC_RPC)
-      const c = new ethers.Contract(REFERRAL_CONTRACT_ADDRESS, REFERRAL_ABI, provider)
-      const o = await c.owner()
-      setOwner(o)
+      await navigator.clipboard.writeText(referralLink);
+      toast.success("Referral link copied");
     } catch {
-      // keep owner empty if contract not deployed / address not set
-    } finally {
-      setIsOwnerLoading(false)
+      toast.error("Failed to copy");
     }
-  }
+  };
 
-  const fetchOwnerWithBrowserProvider = async () => {
-    if (!window.ethereum) return
+  const clearStoredReferrer = () => {
     try {
-      setIsOwnerLoading(true)
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const c = new ethers.Contract(REFERRAL_CONTRACT_ADDRESS, REFERRAL_ABI, provider)
-      const o = await c.owner()
-      setOwner(o)
+      localStorage.removeItem("expoin-referrer");
+      toast.success("Referral code cleared");
+      // принудительно ре-рендер
+      window.location.reload();
     } catch {
-      // fallback to public RPC
-      await fetchOwnerWithPublicRpc()
-    } finally {
-      setIsOwnerLoading(false)
+      // ignore
     }
-  }
+  };
+
+  // ===== UI =====
 
   return (
-    <div className="min-h-screen" style={{ background: '#E8E4F3' }}>
-      {/* Header (same style logic as TokenSale) */}
+    <div className="min-h-screen" style={{ background: "#E8E4F3" }}>
+      {/* Header — копия стиля TokenSale */}
       <header className="border-b bg-white/60 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -288,13 +180,11 @@ export default function Referral() {
             <div className="flex items-center gap-3">
               <div className="hidden md:flex flex-col items-end">
                 <p className="text-sm font-medium text-gray-900">{formatAddress(account)}</p>
-                <p className="text-xs text-gray-500">
-                  {isOwnerLoading ? 'Checking role…' : isAdmin ? 'Admin' : 'User'}
-                </p>
+                <p className="text-xs text-gray-500">Referral dashboard</p>
               </div>
               <div
                 className="w-10 h-10 rounded-full flex items-center justify-center"
-                style={{ background: 'linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)' }}
+                style={{ background: "linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)" }}
               >
                 <Wallet className="w-5 h-5 text-white" />
               </div>
@@ -314,7 +204,7 @@ export default function Referral() {
               disabled={isConnecting}
               size="lg"
               className="rounded-full text-white font-semibold px-8"
-              style={{ background: '#000000' }}
+              style={{ background: "#000000" }}
             >
               {isConnecting ? (
                 <>
@@ -334,294 +224,248 @@ export default function Referral() {
 
       {/* Main */}
       <main className="container mx-auto px-4 py-12">
+        {/* Hero */}
         <div className="text-center mb-12">
-          <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-4">Referral Dashboard</h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">Track your referral earnings and activity.</p>
+          <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-4">Referral Program</h1>
+          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+            Share your link and track referrals and purchases.
+          </p>
         </div>
 
-        <ReferrerBanner referrer={storedReferrer} onClear={clearStoredReferrer} />
+        {/* Stored referrer banner (если человек пришёл по ссылке) */}
+        {storedReferrer ? (
+          <div className="max-w-4xl mx-auto mb-10">
+            <Card className="rounded-3xl border-0 shadow-xl">
+              <CardHeader>
+                <CardTitle className="text-xl">Active referral</CardTitle>
+                <CardDescription>
+                  This wallet will receive cashback rewards for your purchases.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="text-sm text-gray-700 break-all">{storedReferrer}</div>
+                <Button onClick={clearStoredReferrer} variant="outline" className="rounded-full">
+                  Clear
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
 
         {!account ? (
-          <WalletRequired onConnect={showWalletSelection} />
-        ) : isAdmin ? (
-          <AdminDashboard account={account} />
+          <div className="max-w-4xl mx-auto">
+            <Card className="rounded-3xl border-0 shadow-xl">
+              <CardHeader>
+                <CardTitle className="text-2xl">Connect your wallet</CardTitle>
+                <CardDescription>
+                  Connect a Web3 wallet to view your referral stats.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button
+                  onClick={showWalletSelection}
+                  size="lg"
+                  className="rounded-full text-white font-semibold px-8"
+                  style={{ background: "#000000" }}
+                >
+                  <Wallet className="w-4 h-4 mr-2" />
+                  Connect Wallet
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
         ) : (
-          <UserDashboard account={account} />
+          <div className="max-w-7xl mx-auto space-y-8">
+            {/* Stats cards — визуал как в TokenSale */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div
+                className="rounded-3xl shadow-lg overflow-hidden p-6"
+                style={{ background: "linear-gradient(135deg, #00D9FF 0%, #6B5DD3 100%)" }}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <TrendingUp className="w-4 h-4 text-white/80" />
+                  <p className="text-sm font-medium text-white/80">Total USDT Volume</p>
+                </div>
+                <p className="text-4xl font-bold text-white">
+                  {isLoading ? "…" : (data?.totals?.total_usdt ?? "0")}
+                </p>
+                <p className="text-sm text-white/80 mt-1">Across referral purchases</p>
+              </div>
+
+              <div
+                className="rounded-3xl shadow-lg overflow-hidden p-6"
+                style={{ background: "linear-gradient(135deg, #6B5DD3 0%, #9D8FE8 100%)" }}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock className="w-4 h-4 text-white/80" />
+                  <p className="text-sm font-medium text-white/80">Total Tokens</p>
+                </div>
+                <p className="text-4xl font-bold text-white">
+                  {isLoading ? "…" : (data?.totals?.total_tokens ?? "0")}
+                </p>
+                <p className="text-sm text-white/80 mt-1">Bought by referrals</p>
+              </div>
+
+              <div
+                className="rounded-3xl shadow-lg overflow-hidden p-6"
+                style={{ background: "linear-gradient(135deg, #111827 0%, #000000 100%)" }}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <Users className="w-4 h-4 text-white/80" />
+                  <p className="text-sm font-medium text-white/80">Referrals</p>
+                </div>
+                <p className="text-4xl font-bold text-white">
+                  {isLoading ? "…" : String(data?.referrals?.length ?? 0)}
+                </p>
+                <p className="text-sm text-white/80 mt-1">Direct (1 level)</p>
+              </div>
+            </div>
+
+            {/* Referral link */}
+            <Card className="rounded-3xl border-0 shadow-xl">
+              <CardHeader>
+                <CardTitle className="text-2xl">Your referral link</CardTitle>
+                <CardDescription>Share this link to invite users.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col md:flex-row md:items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-600 mb-1">Link</p>
+                  <p className="font-semibold text-gray-900 break-all">{referralLink}</p>
+                </div>
+                <Button
+                  onClick={copyReferralLink}
+                  className="rounded-full text-white"
+                  style={{ background: "#000000" }}
+                >
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Lists */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Referrals */}
+              <div className="lg:col-span-1">
+                <Card className="rounded-3xl border-0 shadow-xl">
+                  <CardHeader>
+                    <CardTitle className="text-xl">Your referrals</CardTitle>
+                    <CardDescription>Direct referrals only</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {isLoading ? (
+                      <div className="text-center py-8 text-gray-500">
+                        <Loader2 className="w-6 h-6 mx-auto mb-3 animate-spin" />
+                        <p className="text-sm">Loading…</p>
+                      </div>
+                    ) : !data?.referrals?.length ? (
+                      <div className="text-center py-8 text-gray-500">
+                        <Users className="w-10 h-10 mx-auto mb-3 opacity-50" />
+                        <p className="text-sm">No referrals yet</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {data.referrals.slice(0, 20).map((r: any) => (
+                          <div
+                            key={r.referral_wallet}
+                            className="flex items-center justify-between p-3 border rounded-2xl hover:bg-gray-50 transition-colors"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-900 truncate">
+                                {formatAddress(r.referral_wallet)}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {new Date(r.created_at).toLocaleDateString()}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Purchases */}
+              <div className="lg:col-span-2">
+                <Card className="rounded-3xl border-0 shadow-xl">
+                  <CardHeader>
+                    <CardTitle className="text-xl">Referral purchases</CardTitle>
+                    <CardDescription>Latest purchases made by your referrals</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {isLoading ? (
+                      <div className="text-center py-10 text-gray-500">
+                        <Loader2 className="w-6 h-6 mx-auto mb-3 animate-spin" />
+                        <p className="text-sm">Loading…</p>
+                      </div>
+                    ) : !data?.purchases?.length ? (
+                      <div className="text-center py-10 text-gray-500">
+                        <Clock className="w-10 h-10 mx-auto mb-3 opacity-50" />
+                        <p className="text-sm">No purchases yet</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {data.purchases.slice(0, 20).map((p: any) => (
+                          <div
+                            key={p.tx_hash}
+                            className="p-4 border rounded-2xl hover:bg-gray-50 transition-colors"
+                          >
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-gray-900">
+                                  Buyer: {formatAddress(p.buyer_wallet)}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {new Date(p.created_at).toLocaleString()}
+                                </p>
+                              </div>
+                              <div className="flex gap-4 text-sm">
+                                <div>
+                                  <p className="text-xs text-gray-500">USDT</p>
+                                  <p className="font-semibold text-gray-900">{p.usdt_amount}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-gray-500">Tokens</p>
+                                  <p className="font-semibold text-gray-900">{p.tokens_amount}</p>
+                                </div>
+                              </div>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-2 break-all">
+                              Tx: {p.tx_hash}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </div>
         )}
 
-        {/* Wallet Selection Modal (same UX style as TokenSale) */}
+        {/* Wallet Selection Modal — копия TokenSale */}
         <Dialog open={showWalletModal} onOpenChange={setShowWalletModal}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="text-2xl font-bold">Connect Wallet</DialogTitle>
               <DialogDescription>Choose your preferred wallet to connect</DialogDescription>
             </DialogHeader>
+
             <div className="grid gap-3 py-4">
-              <WalletChoice label="MetaMask" onClick={() => connectWallet('metamask')} />
-              <WalletChoice label="Rabby" onClick={() => connectWallet('rabby')} />
-              <WalletChoice label="OKX Wallet" onClick={() => connectWallet('okx')} />
-              <WalletChoice label="SafePal" onClick={() => connectWallet('safepal')} />
-              <WalletChoice label="Binance Web3 Wallet" onClick={() => connectWallet('binance')} />
-              <WalletChoice label="Trust Wallet" onClick={() => connectWallet('trustwallet')} />
+              <WalletChoice label="MetaMask" onClick={() => connectWallet("metamask")} />
+              <WalletChoice label="Rabby" onClick={() => connectWallet("rabby")} />
+              <WalletChoice label="OKX Wallet" onClick={() => connectWallet("okx")} />
+              <WalletChoice label="SafePal" onClick={() => connectWallet("safepal")} />
+              <WalletChoice label="Binance Web3 Wallet" onClick={() => connectWallet("binance")} />
+              <WalletChoice label="Trust Wallet" onClick={() => connectWallet("trustwallet")} />
             </div>
           </DialogContent>
         </Dialog>
       </main>
     </div>
-  )
-}
-
-// ------------------ User Dashboard ------------------
-
-function UserDashboard({ account }: { account: string }) {
-  return (
-    <div className="max-w-7xl mx-auto">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
-          <Card className="rounded-3xl border-0 shadow-xl">
-            <CardHeader>
-              <CardTitle className="text-2xl">Your Referrals</CardTitle>
-              <CardDescription>Direct referrals only (1 level)</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <ReferralStats />
-              <ReferralLink account={account} />
-              <ReferralList />
-            </CardContent>
-          </Card>
-        </div>
-
-        <div>
-          <Card className="rounded-3xl border-0 shadow-xl">
-            <CardHeader>
-              <CardTitle className="text-xl">Referral Purchases</CardTitle>
-              <CardDescription>History (placeholder)</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ReferralHistory />
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ReferralStats() {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <StatCard title="Pending Rewards" value="—" />
-      <StatCard title="Total Paid" value="—" />
-      <StatCard title="Your Grade" value="—" />
-    </div>
-  )
-}
-
-function ReferralLink({ account }: { account: string }) {
-  const fullLink = `https://token.expoin.io/r/${account}`
-  const shortCode = `${account.slice(0, 6)}…${account.slice(-4)}`
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(fullLink)
-      toast.success('Referral link copied')
-    } catch {
-      toast.error('Failed to copy')
-    }
-  }
-
-  return (
-    <div className="p-5 rounded-2xl" style={{ background: '#F3F4F6' }}>
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-sm text-gray-600 mb-1">Your referral link</p>
-          <p className="font-semibold text-gray-900 truncate" title={fullLink}>
-            {fullLink}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">Code: {shortCode}</p>
-        </div>
-        <Button onClick={copy} className="rounded-full" style={{ background: '#000000' }}>
-          Copy
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function ReferralList() {
-  return (
-    <div className="space-y-3">
-      <p className="text-sm text-gray-600">Direct referrals (placeholder)</p>
-      <div className="p-4 border rounded-2xl bg-white">
-        <p className="text-sm text-gray-500">No referrals yet</p>
-      </div>
-    </div>
-  )
-}
-
-function ReferralHistory() {
-  return (
-    <div className="text-center py-8 text-gray-500">
-      <p className="text-sm">No referral purchases yet</p>
-    </div>
-  )
-}
-
-// ------------------ Admin Dashboard ------------------
-
-function AdminDashboard({ account }: { account: string }) {
-  return (
-    <div className="max-w-7xl mx-auto">
-      <Card className="rounded-3xl border-0 shadow-xl">
-        <CardHeader>
-          <CardTitle className="text-2xl">Admin Dashboard</CardTitle>
-          <CardDescription>
-            Owner: {account.slice(0, 6)}…{account.slice(-4)}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <AdminStats />
-          <SetGrade />
-          <ReferrersTable />
-          <DailyPayouts />
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function AdminStats() {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <StatCard title="Total Pending" value="—" />
-      <StatCard title="Total Paid" value="—" />
-      <StatCard title="Active Referrers" value="—" />
-    </div>
-  )
-}
-
-function SetGrade() {
-  return (
-    <div className="p-5 rounded-2xl" style={{ background: '#F3F4F6' }}>
-      <p className="font-semibold text-gray-900 mb-3">Set Referrer Grade</p>
-      <div className="flex flex-col md:flex-row gap-3">
-        <input className="flex-1 rounded-xl border px-3 py-2" placeholder="Wallet address" />
-        <select className="rounded-xl border px-3 py-2" defaultValue="30">
-          <option value="20">20%</option>
-          <option value="30">30%</option>
-          <option value="50">50%</option>
-        </select>
-        <Button className="rounded-full" style={{ background: '#000000' }}>
-          Apply
-        </Button>
-      </div>
-      <p className="text-xs text-gray-500 mt-2">Grade applies only to future purchases.</p>
-    </div>
-  )
-}
-
-function ReferrersTable() {
-  return (
-    <div className="p-5 rounded-2xl" style={{ background: '#F3F4F6' }}>
-      <p className="font-semibold text-gray-900 mb-3">Referrers</p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500">
-              <th className="py-2">Wallet</th>
-              <th className="py-2">Grade</th>
-              <th className="py-2">Pending</th>
-              <th className="py-2">Paid</th>
-              <th className="py-2">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-t">
-              <td className="py-3">0xAB…12</td>
-              <td className="py-3">30%</td>
-              <td className="py-3">—</td>
-              <td className="py-3">—</td>
-              <td className="py-3">
-                <Button variant="outline" size="sm" className="rounded-full">
-                  View
-                </Button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function DailyPayouts() {
-  return (
-    <div className="p-5 rounded-2xl" style={{ background: '#F3F4F6' }}>
-      <p className="font-semibold text-gray-900 mb-2">Daily Payouts</p>
-      <p className="text-sm text-gray-600 mb-4">Total to pay: —</p>
-      <Button className="rounded-full" style={{ background: '#000000' }}>
-        Mark as Paid
-      </Button>
-    </div>
-  )
-}
-
-// ------------------ UI Primitives ------------------
-
-function ReferrerBanner({ referrer, onClear }: { referrer: string; onClear: () => void }) {
-  if (!referrer) return null
-
-  return (
-    <div className="max-w-3xl mx-auto mb-8">
-      <Card className="rounded-3xl border-0 shadow-xl">
-        <CardHeader>
-          <CardTitle className="text-xl">Active referral</CardTitle>
-          <CardDescription>This wallet will receive cashback rewards for your purchases.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div className="text-sm text-gray-700 break-all">{referrer}</div>
-          <Button onClick={onClear} variant="outline" className="rounded-full">
-            Clear
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function WalletRequired({ onConnect }: { onConnect: () => void }) {
-  return (
-    <Card className="rounded-3xl border-0 shadow-xl max-w-3xl mx-auto">
-      <CardHeader>
-        <CardTitle className="text-2xl">Connect your wallet</CardTitle>
-        <CardDescription>Connect a Web3 wallet to access your referral dashboard.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Button
-          onClick={onConnect}
-          size="lg"
-          className="rounded-full text-white font-semibold px-8"
-          style={{ background: '#000000' }}
-        >
-          <Wallet className="w-4 h-4 mr-2" />
-          Connect Wallet
-        </Button>
-        <p className="text-xs text-gray-500 mt-3">The page renders without data until you connect.</p>
-      </CardContent>
-    </Card>
-  )
-}
-
-function StatCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div
-      className="rounded-3xl shadow-lg overflow-hidden p-6"
-      style={{ background: 'linear-gradient(135deg, #6B5DD3 0%, #9D8FE8 100%)' }}
-    >
-      <p className="text-sm font-medium text-white/80">{title}</p>
-      <p className="text-3xl font-bold text-white mt-2">{value}</p>
-    </div>
-  )
+  );
 }
 
 function WalletChoice({ label, onClick }: { label: string; onClick: () => void }) {
@@ -637,5 +481,5 @@ function WalletChoice({ label, onClick }: { label: string; onClick: () => void }
         </div>
       </div>
     </Button>
-  )
+  );
 }

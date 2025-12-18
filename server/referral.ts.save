@@ -1,0 +1,138 @@
+import { z } from "zod";
+import { getDb } from "./db";
+import { router, publicProcedure } from "./_core/trpc";
+
+const wallet = z.string().min(3).max(80);
+
+export const referralRouter = router({
+  capture: publicProcedure
+    .input(
+      z.object({
+        referrer: wallet,
+        buyer: wallet,
+      })
+    )
+    .mutation(async ({ input }) => {
+      if (input.referrer.toLowerCase() === input.buyer.toLowerCase()) {
+        return { ok: true };
+      }
+
+      const db = await getDb();
+      if (!db) return { ok: true };
+
+      import { sql } from "drizzle-orm";
+      
+      await db.execute(
+        `INSERT IGNORE INTO referral_links (referrer_wallet, referral_wallet)
+         VALUES (?, ?)`,
+        [
+          input.referrer.toLowerCase(),
+          input.buyer.toLowerCase(),
+        ]
+      );
+
+      return { ok: true };
+    }),
+
+  recordPurchase: publicProcedure
+    .input(
+      z.object({
+        buyer: wallet,
+        txHash: z.string().min(10),
+        usdtAmount: z.string(),
+        tokensAmount: z.string(),
+        chainId: z.number().default(56),
+        referrer: wallet.optional().nullable(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { ok: true };
+
+      const buyer = input.buyer.toLowerCase();
+      let referrer = input.referrer?.toLowerCase() || null;
+
+      if (!referrer) {
+        const [rows]: any = await db.execute(
+          `SELECT referrer_wallet
+           FROM referral_links
+           WHERE referral_wallet = ?
+           LIMIT 1`,
+          [buyer]
+        );
+        referrer = rows?.[0]?.referrer_wallet || null;
+      }
+
+      await db.execute(
+        `INSERT IGNORE INTO referral_purchases
+         (buyer_wallet, referrer_wallet, usdt_amount, tokens_amount, tx_hash, chain_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          buyer,
+          referrer,
+          input.usdtAmount,
+          input.tokensAmount,
+          input.txHash,
+          input.chainId,
+        ]
+      );
+
+      return { ok: true };
+    }),
+
+  getUserData: publicProcedure
+    .input(z.object({ wallet }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) {
+        return { referrals: [], purchases: [], totals: { total_usdt: "0", total_tokens: "0" } };
+      }
+
+      const w = input.wallet.toLowerCase();
+
+      const [refs]: any = await db.execute(
+        `SELECT referral_wallet, created_at
+         FROM referral_links
+         WHERE referrer_wallet = ?
+         ORDER BY created_at DESC`,
+        [w]
+      );
+
+      const [purchases]: any = await db.execute(
+        `SELECT buyer_wallet, usdt_amount, tokens_amount, tx_hash, created_at
+         FROM referral_purchases
+         WHERE referrer_wallet = ?
+         ORDER BY created_at DESC`,
+        [w]
+      );
+
+      const [totals]: any = await db.execute(
+        `SELECT
+           COALESCE(SUM(usdt_amount), 0) AS total_usdt,
+           COALESCE(SUM(tokens_amount), 0) AS total_tokens
+         FROM referral_purchases
+         WHERE referrer_wallet = ?`,
+        [w]
+      );
+
+      return {
+        referrals: refs,
+        purchases,
+        totals: totals?.[0] ?? { total_usdt: "0", total_tokens: "0" },
+      };
+    }),
+
+  isAdmin: publicProcedure
+    .input(z.object({ wallet }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { isAdmin: false };
+
+      const [rows]: any = await db.execute(
+        `SELECT wallet FROM referral_admins WHERE wallet = ? LIMIT 1`,
+        [input.wallet.toLowerCase()]
+      );
+
+      return { isAdmin: !!rows?.[0] };
+    }),
+});

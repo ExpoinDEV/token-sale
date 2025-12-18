@@ -389,9 +389,10 @@ export default function TokenSale() {
       }, ...prev]);
 
       toast.info('Transaction submitted...');
-
+      
       // Wait for confirmation
       const receipt = await tx.wait();
+
       
       // Update transaction status
       setTransactions(prev =>
@@ -399,13 +400,8 @@ export default function TokenSale() {
           t.hash === tx.hash ? { ...t, status: receipt.status === 1 ? 'success' : 'failed' } : t
         )
       );
-// === REFERRAL: record purchase ===
+       // === REFERRAL: record purchase ===
 if (receipt.status === 1) {
-  const buyerWallet = account;
-  const txHash = tx.hash;
-  const usdt = usdtAmount;
-  const tokens = calculateTokens();
-
   try {
     const referrer = localStorage.getItem("expoin-referrer");
 
@@ -416,10 +412,10 @@ if (receipt.status === 1) {
         credentials: "include",
         body: JSON.stringify({
           json: {
-            buyer: buyerWallet,
-            txHash,
-            usdtAmount: usdt,
-            tokensAmount: tokens,
+            buyer: account,
+            txHash: tx.hash,
+            usdtAmount: usdtAmount,
+            tokensAmount: calculateTokens(),
             chainId: 56,
             referrer,
           },
@@ -430,6 +426,7 @@ if (receipt.status === 1) {
     console.error("[Referral] recordPurchase failed", e);
   }
 }
+
       if (receipt.status === 1) {
         toast.success('Purchase successful!');
         setUsdtAmount('');

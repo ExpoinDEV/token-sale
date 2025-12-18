@@ -5,7 +5,6 @@ import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
-import * as db from "../db";
 import { ENV } from "./env";
 import type {
   ExchangeTokenRequest,
@@ -164,19 +163,7 @@ class SDKServer {
    * @example
    * const sessionToken = await sdk.createSessionToken(userInfo.openId);
    */
-  async createSessionToken(
-    openId: string,
-    options: { expiresInMs?: number; name?: string } = {}
-  ): Promise<string> {
-    return this.signSession(
-      {
-        openId,
-        appId: ENV.appId,
-        name: options.name || "",
-      },
-      options
-    );
-  }
+ 
 
   async signSession(
     payload: SessionPayload,
@@ -196,6 +183,22 @@ class SDKServer {
       .setExpirationTime(expirationSeconds)
       .sign(secretKey);
   }
+async createSessionToken(
+  openId: string,
+  options: { expiresInMs?: number; name?: string } = {}
+): Promise<string> {
+  return this.signSession(
+    {
+      openId,
+      appId: ENV.appId,
+      name: options.name || "",
+    },
+    {
+      ...options,
+      expiresInMs: 1000 * 60 * 60 * 24 * 7, // ✅ 7 дней
+    }
+  );
+}
 
   async verifySession(
     cookieValue: string | undefined | null
